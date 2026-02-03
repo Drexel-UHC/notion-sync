@@ -218,6 +218,25 @@ describe("freezePage", () => {
 		expect(written).toContain("  - u2");
 	});
 
+	it("uses pre-fetched page and skips pages.retrieve()", async () => {
+		const page = makePage("Pre-fetched");
+		const client = mockClient(page);
+		const fs = mockFs();
+		const fm = mockFm();
+
+		const result = await freezePage({
+			client, fs, fm,
+			notionId: "page-123",
+			outputFolder: "output",
+			page: page as any,
+		});
+
+		expect(result.status).toBe("created");
+		expect(result.filePath).toBe("output/Pre-fetched.md");
+		expect(client.pages.retrieve).not.toHaveBeenCalled();
+		expect(fs.writeFile).toHaveBeenCalledOnce();
+	});
+
 	it("handles untitled page", async () => {
 		const page = {
 			object: "page",

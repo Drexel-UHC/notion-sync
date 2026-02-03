@@ -40,8 +40,7 @@
     }
   },
   "dependencies": {
-    "@notion-sync/core": "*",
-    "yaml": "^2.7.0"
+    "@notion-sync/core": "*"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

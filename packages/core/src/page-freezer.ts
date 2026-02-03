@@ -6,20 +6,21 @@ import {
 import { FileSystem, FrontmatterReader, FreezeOptions, PageFreezeResult } from "./types.js";
 import { notionRequest } from "./notion-client.js";
 import { convertBlocksToMarkdown, convertRichText, fetchAllChildren } from "./block-converter.js";
+import { sanitizeFileName, joinPath } from "./utils.js";
 
 export async function freezePage(
 	options: FreezeOptions
 ): Promise<PageFreezeResult> {
 	const { client, fs, fm, notionId, outputFolder, databaseId } = options;
 
-	// Fetch page metadata
-	const page = (await notionRequest(() =>
+	// Use pre-fetched page if provided, otherwise fetch from API
+	const page = options.page ?? (await notionRequest(() =>
 		client.pages.retrieve({ page_id: notionId })
 	)) as PageObjectResponse;
 
 	const title = getPageTitle(page);
 	const safeName = sanitizeFileName(title || "Untitled");
-	const filePath = outputFolder + "/" + safeName + ".md";
+	const filePath = joinPath(outputFolder, safeName + ".md");
 
 	// Check for re-freeze: compare last_edited_time
 	const exists = await fs.fileExists(filePath);
@@ -74,10 +75,6 @@ function getPageTitle(page: PageObjectResponse): string {
 		}
 	}
 	return "Untitled";
-}
-
-function sanitizeFileName(name: string): string {
-	return name.replace(/[\\/:*?"<>|]/g, "-").trim() || "Untitled";
 }
 
 function mapPropertiesToFrontmatter(

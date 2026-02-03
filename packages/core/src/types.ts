@@ -1,4 +1,5 @@
 import { Client } from "@notionhq/client";
+import { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints";
 
 export interface FileSystem {
 	readFile(path: string): Promise<string>;
@@ -33,6 +34,7 @@ export interface FreezeOptions {
 	outputFolder: string;
 	notionId: string;
 	databaseId?: string;
+	page?: PageObjectResponse;
 }
 
 export interface PageFreezeResult {

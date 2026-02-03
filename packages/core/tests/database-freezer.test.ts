@@ -45,10 +45,11 @@ function makeDatabase(title: string) {
 	};
 }
 
-function makeEntry(id: string, title: string) {
+function makeEntry(id: string, title: string, lastEdited = "2024-01-15T10:00:00.000Z") {
 	return {
 		object: "page",
 		id,
+		last_edited_time: lastEdited,
 		properties: {
 			Name: { type: "title", title: [{ plain_text: title }] },
 		},
@@ -92,6 +93,75 @@ describe("freezeDatabase", () => {
 		expect(result.failed).toBe(0);
 		expect(fs.mkdir).toHaveBeenCalledWith("output/My Database", true);
 		expect(freezePage).toHaveBeenCalledTimes(2);
+	});
+
+	it("skips entries where last_edited_time matches stored frontmatter", async () => {
+		const client = {
+			databases: {
+				retrieve: vi.fn().mockResolvedValue(makeDatabase("DB")),
+			},
+			dataSources: {
+				retrieve: vi.fn().mockResolvedValue({ id: "ds-1", title: [] }),
+				query: vi.fn().mockResolvedValue({
+					results: [
+						makeEntry("e-1", "E1", "2024-01-15T10:00:00.000Z"),
+						makeEntry("e-2", "E2", "2024-01-15T10:00:00.000Z"),
+						makeEntry("e-3", "E3", "2024-02-01T12:00:00.000Z"),
+					],
+					has_more: false,
+				}),
+			},
+		} as unknown as Client;
+
+		const fs = mockFs();
+		const fm = mockFm();
+
+		// e-1 and e-2 have matching local frontmatter, e-3 is changed
+		(fs.listMarkdownFiles as any).mockResolvedValue(["E1.md", "E2.md", "E3.md"]);
+		(fm.readFrontmatter as any)
+			.mockResolvedValueOnce({ "notion-id": "e-1", "notion-last-edited": "2024-01-15T10:00:00.000Z" })
+			.mockResolvedValueOnce({ "notion-id": "e-2", "notion-last-edited": "2024-01-15T10:00:00.000Z" })
+			.mockResolvedValueOnce({ "notion-id": "e-3", "notion-last-edited": "2024-01-01T00:00:00.000Z" });
+
+		const result = await freezeDatabase({
+			client, fs, fm,
+			notionId: "db-123",
+			outputFolder: "output",
+		});
+
+		expect(freezePage).toHaveBeenCalledTimes(1);
+		expect(result.skipped).toBe(2);
+		expect(result.created).toBe(1);
+		expect(result.deleted).toBe(0);
+	});
+
+	it("passes pre-fetched page to freezePage", async () => {
+		const entry = makeEntry("e-1", "E1");
+		const client = {
+			databases: {
+				retrieve: vi.fn().mockResolvedValue(makeDatabase("DB")),
+			},
+			dataSources: {
+				retrieve: vi.fn().mockResolvedValue({ id: "ds-1", title: [] }),
+				query: vi.fn().mockResolvedValue({
+					results: [entry],
+					has_more: false,
+				}),
+			},
+		} as unknown as Client;
+
+		const fs = mockFs();
+		const fm = mockFm();
+
+		await freezeDatabase({
+			client, fs, fm,
+			notionId: "db-123",
+			outputFolder: "output",
+		});
+
+		expect(freezePage).toHaveBeenCalledWith(
+			expect.objectContaining({ page: entry })
+		);
 	});
 
 	it("paginates through all entries", async () => {
@@ -147,7 +217,7 @@ describe("freezeDatabase", () => {
 		// Simulate existing local files with a deleted entry
 		(fs.listMarkdownFiles as any).mockResolvedValue(["E1.md", "Deleted.md"]);
 		(fm.readFrontmatter as any)
-			.mockResolvedValueOnce({ "notion-id": "e-1" }) // E1.md
+			.mockResolvedValueOnce({ "notion-id": "e-1", "notion-last-edited": "2024-01-15T10:00:00.000Z" }) // E1.md — matches entry
 			.mockResolvedValueOnce({ "notion-id": "e-deleted" }); // Deleted.md
 
 		// readFile for markAsDeleted
@@ -302,7 +372,7 @@ describe("freezeDatabase", () => {
 		// Two local files, one without notion-id
 		(fs.listMarkdownFiles as any).mockResolvedValue(["A.md", "B.md", "C.md"]);
 		(fm.readFrontmatter as any)
-			.mockResolvedValueOnce({ "notion-id": "e-1" })
+			.mockResolvedValueOnce({ "notion-id": "e-1", "notion-last-edited": "2024-01-15T10:00:00.000Z" })
 			.mockResolvedValueOnce({ "notion-id": "e-orphan" })
 			.mockResolvedValueOnce(null); // C.md has no frontmatter
 

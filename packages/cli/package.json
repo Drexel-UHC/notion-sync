@@ -9,8 +9,7 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@notion-sync/core": "*",
-    "yaml": "^2.7.0"
+    "@notion-sync/core": "*"
   },
   "devDependencies": {
     "@types/node": "^25.2.0",

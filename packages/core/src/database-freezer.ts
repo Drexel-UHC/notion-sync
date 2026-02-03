@@ -10,6 +10,7 @@ import { DatabaseFreezeResult, FileSystem, FrontmatterReader, FreezeOptions, Pro
 import { notionRequest } from "./notion-client.js";
 import { convertRichText } from "./block-converter.js";
 import { freezePage } from "./page-freezer.js";
+import { sanitizeFileName, joinPath } from "./utils.js";
 
 /**
  * Syncs a Notion database to local Markdown files.
@@ -30,8 +31,8 @@ export async function freezeDatabase(
 	)) as DatabaseObjectResponse;
 
 	const dbTitle = convertRichText(database.title) || "Untitled Database";
-	const safeName = dbTitle.replace(/[\\/:*?"<>|]/g, "-").trim() || "Untitled Database";
-	const folderPath = outputFolder + "/" + safeName;
+	const safeName = sanitizeFileName(dbTitle);
+	const folderPath = joinPath(outputFolder, safeName);
 
 	// Get the data source ID for querying entries and reading properties
 	if (!database.data_sources || database.data_sources.length === 0) {
@@ -63,12 +64,22 @@ export async function freezeDatabase(
 	let failed = 0;
 	const errors: string[] = [];
 
-	// Process each entry — continue on failure
-	const total = entries.length;
-	const processedIds = new Set<string>();
+	// Pre-filter: skip entries whose last_edited_time matches stored frontmatter
+	const allEntryIds = new Set(entries.map(e => e.id));
+
+	const entriesToProcess = entries.filter(entry => {
+		const local = localFiles.get(entry.id);
+		if (local?.lastEdited && local.lastEdited === entry.last_edited_time) {
+			skipped++;
+			return false;
+		}
+		return true;
+	});
+
+	// Process only changed/new entries — continue on failure
+	const total = entriesToProcess.length;
 	let current = 0;
-	for (const entry of entries) {
-		processedIds.add(entry.id);
+	for (const entry of entriesToProcess) {
 		current++;
 
 		if (onProgress) onProgress(current, total, dbTitle);
@@ -81,6 +92,7 @@ export async function freezeDatabase(
 				notionId: entry.id,
 				outputFolder: folderPath,
 				databaseId: notionId,
+				page: entry,
 			});
 
 			switch (result.status) {
@@ -103,9 +115,9 @@ export async function freezeDatabase(
 	}
 
 	// Mark deleted entries (in Notion but not returned in query)
-	for (const [id, filePath] of localFiles) {
-		if (!processedIds.has(id)) {
-			await markAsDeleted(fs, filePath);
+	for (const [id, info] of localFiles) {
+		if (!allEntryIds.has(id)) {
+			await markAsDeleted(fs, info.filePath);
 			deleted++;
 		}
 	}
@@ -148,12 +160,17 @@ async function queryAllEntries(
 	return entries;
 }
 
+interface LocalFileInfo {
+	filePath: string;
+	lastEdited?: string;
+}
+
 async function scanLocalFiles(
 	fs: FileSystem,
 	fm: FrontmatterReader,
 	folderPath: string
-): Promise<Map<string, string>> {
-	const map = new Map<string, string>();
+): Promise<Map<string, LocalFileInfo>> {
+	const map = new Map<string, LocalFileInfo>();
 
 	let files: string[];
 	try {
@@ -164,11 +181,15 @@ async function scanLocalFiles(
 	}
 
 	for (const fileName of files) {
-		const filePath = folderPath + "/" + fileName;
+		const filePath = joinPath(folderPath, fileName);
 		const frontmatter = await fm.readFrontmatter(filePath);
 		const notionId = frontmatter?.["notion-id"];
 		if (typeof notionId === "string") {
-			map.set(notionId, filePath);
+			const lastEdited = frontmatter?.["notion-last-edited"];
+			map.set(notionId, {
+				filePath,
+				lastEdited: typeof lastEdited === "string" ? lastEdited : undefined,
+			});
 		}
 	}
 

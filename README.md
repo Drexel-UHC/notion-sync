@@ -1,75 +1,109 @@
 # notion-sync
 
-Sync Notion pages and databases to local Markdown files with YAML frontmatter. Supports incremental sync, deletion tracking, and 30+ block types.
+Sync Notion pages and databases to local Markdown files with YAML frontmatter. Works as a CLI tool or a VS Code extension.
+
+Given a Notion page or database URL, notion-sync fetches the content via the Notion API and writes it to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and (for database entries) all property values. On subsequent runs it compares `last_edited_time` and only re-syncs pages that changed.
 
 ## Architecture
 
 ```
 packages/
-  core/     ← all business logic, zero platform dependencies
-  cli/      ← thin wrapper using node:fs
-  vscode/   ← thin wrapper using vscode.workspace.fs
+  core/     @notion-sync/core       Platform-agnostic sync engine (all business logic)
+  cli/      notion-sync             CLI tool using node:fs
+  vscode/   notion-sync-vscode      VS Code extension using vscode.workspace.fs
 ```
 
-- **Core** owns everything: Notion API calls, block-to-Markdown conversion, frontmatter generation, sync logic
-- **CLI** and **VS Code** are adapters — they implement two small interfaces (`FileSystem`, `FrontmatterReader`) and wire them to core
-- Core never imports `node:fs` or `vscode` — platform behavior is injected, not hardcoded
+**Core** contains everything: Notion API calls, block-to-Markdown conversion, frontmatter generation, incremental sync, and deletion tracking. It never imports `node:fs` or `vscode` directly.
 
-### Origin
+**CLI** and **VS Code** are thin adapters. They implement two interfaces (`FileSystem` and `FrontmatterReader`) defined in core, then pass them in. This keeps platform-specific code to a few dozen lines per adapter.
 
-- Extracted from [obsidian-notion-database-sync](https://github.com/ran-codes/obsidian-notion-database-sync), an Obsidian plugin
-  - All Obsidian-specific code (`app.vault`, `requestUrl`, modals, settings UI) was replaced with injectable interfaces
-  - The block converter, retry logic, and property mapper were carried over unchanged
-  - ADR documenting the extraction: `.claude/reference/v0.1/initial-ideas.md`
+```
+                  +-----------+     +-----------+
+                  |    CLI    |     |  VS Code  |
+                  | (node:fs) |     | (vscode)  |
+                  +-----+-----+     +-----+-----+
+                        |                 |
+                        v                 v
+              FileSystem + FrontmatterReader  (interfaces)
+                        |                 |
+                        +--------+--------+
+                                 |
+                           +-----v-----+
+                           |   Core    |
+                           | (sync     |
+                           |  engine)  |
+                           +-----------+
+```
 
-## Workflow
+## Prerequisites
 
-### Setup
+- **Node.js** >= 18
+- **npm** >= 9 (ships with Node)
+- A **Notion integration** with access to the pages/databases you want to sync
+
+### Creating a Notion integration
+
+1. Go to [notion.so/my-integrations](https://www.notion.so/my-integrations)
+2. Click "New integration"
+3. Give it a name (e.g. "notion-sync") and select a workspace
+4. Copy the **Internal Integration Secret** (starts with `ntn_`)
+5. In Notion, open the page or database you want to sync
+6. Click the `...` menu > "Connections" > add your integration
+
+## Quick start
 
 ```sh
+# Clone and install
+git clone https://github.com/ran-codes/notion-sync.git
+cd notion-sync
 npm install
+
+# Build all packages
+npm run build
+
+# Sync a Notion page
+node packages/cli/dist/main.js sync <notion-url-or-id> \
+  --api-key <your-api-key> \
+  --output ./out
+
+# Or save your API key first
+node packages/cli/dist/main.js config set apiKey <your-api-key>
+node packages/cli/dist/main.js sync <notion-url-or-id> --output ./out
 ```
 
-### Build
+## Commands
 
 ```sh
-npm run build          # all packages
-npm run build:core     # just core
-npm run build:cli      # just cli
-npm run build:vscode   # just vscode (esbuild bundle)
+npm run build          # Build all 3 packages
+npm run build:core     # Build only core (tsc)
+npm run build:cli      # Build only CLI (tsc)
+npm run build:vscode   # Build only VS Code extension (esbuild)
+npm run test           # Run core unit tests (vitest, 76 tests)
 ```
 
-### Test
+## Package documentation
 
-```sh
-npm test               # runs vitest in packages/core
-```
+- [packages/core/README.md](packages/core/README.md) -- Sync engine internals, file-by-file guide, key patterns
+- [packages/cli/README.md](packages/cli/README.md) -- CLI install, command reference, configuration
+- [packages/vscode/README.md](packages/vscode/README.md) -- Extension setup, commands, settings, development
 
-76 unit tests covering block conversion, Notion client, page freezer, and database freezer. Tests mock the `FileSystem` and `FrontmatterReader` interfaces — no Notion API calls.
+## Key design decisions
 
-### Run (CLI)
+- **Incremental sync** -- compares `last_edited_time` from frontmatter and skips unchanged pages
+- **Soft deletes** -- pages removed from a Notion database get `notion-deleted: true` in their frontmatter rather than being deleted from disk
+- **Forward-slash paths** -- core always uses `/` as the path separator; platform adapters resolve to OS-native paths
+- **Manual YAML serialization** -- frontmatter is written with hand-rolled code for precise formatting; the `yaml` package is used only for parsing
+- **Newer Notion API** -- database entries are queried via `client.dataSources.query()` (not `databases.query()`) to get full property data
 
-```sh
-node packages/cli/dist/main.js sync <notion-url-or-id> --api-key <key> --output ./out
-node packages/cli/dist/main.js resync ./out/SomePage.md --api-key <key>
-node packages/cli/dist/main.js config set apiKey <key>
-```
+## Dependencies
 
-### Run (VS Code)
+| Package | Version | Used by |
+|---------|---------|---------|
+| `@notionhq/client` | ^5.3.0 | core |
+| `yaml` | ^2.7.0 | core |
+| `vitest` | ^3.0.0 | core (dev) |
+| `esbuild` | ^0.25.0 | vscode (dev) |
 
-1. Open this repo in VS Code
-2. Press `F5` to launch Extension Development Host
-3. Run "Notion Sync: Sync Page or Database" from the Command Palette
-4. Set `notionSync.apiKey` in VS Code settings
+## Origin
 
-### Develop
-
-- Edit core logic in `packages/core/src/` — this is where sync behavior lives
-- Edit CLI-specific code in `packages/cli/src/` (arg parsing, config, node adapters)
-- Edit VS Code-specific code in `packages/vscode/src/` (commands, vscode adapters)
-- After editing core, rebuild before testing CLI/VS Code: `npm run build:core`
-
-### Deploy
-
-- **CLI**: publish to npm as `notion-sync` (`npm publish -w packages/cli`)
-- **VS Code**: bundle and publish (`cd packages/vscode && npx @vscode/vsce package`)
+Extracted from [obsidian-notion-database-sync](https://github.com/ran-codes/obsidian-notion-database-sync), an Obsidian plugin. The ADR documenting the extraction is at `.claude/reference/v0.1/initial-ideas.md`.

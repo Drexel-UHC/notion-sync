@@ -19,6 +19,15 @@ export {
 	fetchAllChildren,
 } from "./block-converter.js";
 
+export {
+	createFrontmatterReader,
+} from "./frontmatter.js";
+
+export {
+	sanitizeFileName,
+	joinPath,
+} from "./utils.js";
+
 export type {
 	FileSystem,
 	FrontmatterReader,
