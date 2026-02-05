@@ -1,12 +1,11 @@
 {
   "name": "notion-sync",
   "private": true,
-  "workspaces": ["packages/core", "packages/cli", "packages/vscode"],
+  "workspaces": ["packages/core", "packages/cli"],
   "scripts": {
     "build": "npm run build --workspaces",
     "build:core": "npm run build -w packages/core",
     "build:cli": "npm run build -w packages/cli",
-    "build:vscode": "npm run build -w packages/vscode",
     "test": "npm run test -w packages/core"
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { normalizeNotionId, notionRequest, detectNotionObject } from "../src/notion-client.js";
+import { normalizeNotionId, notionRequest } from "../src/notion-client.js";
 import { Client } from "@notionhq/client";
 
 describe("normalizeNotionId", () => {
@@ -111,48 +111,3 @@ describe("notionRequest", () => {
 	});
 });
 
-describe("detectNotionObject", () => {
-	it("detects a page", async () => {
-		const client = {
-			pages: {
-				retrieve: vi.fn().mockResolvedValue({ object: "page", id: "page-id" }),
-			},
-			databases: {
-				retrieve: vi.fn(),
-			},
-		} as unknown as Client;
-
-		const result = await detectNotionObject(client, "page-id");
-		expect(result).toEqual({ type: "page", id: "page-id" });
-		expect(client.databases.retrieve).not.toHaveBeenCalled();
-	});
-
-	it("falls back to database if page fails", async () => {
-		const client = {
-			pages: {
-				retrieve: vi.fn().mockRejectedValue(new Error("Not found")),
-			},
-			databases: {
-				retrieve: vi.fn().mockResolvedValue({ object: "database", id: "db-id" }),
-			},
-		} as unknown as Client;
-
-		const result = await detectNotionObject(client, "db-id");
-		expect(result).toEqual({ type: "database", id: "db-id" });
-	});
-
-	it("throws if neither page nor database found", async () => {
-		const client = {
-			pages: {
-				retrieve: vi.fn().mockRejectedValue(new Error("Not found")),
-			},
-			databases: {
-				retrieve: vi.fn().mockRejectedValue(new Error("Not found")),
-			},
-		} as unknown as Client;
-
-		await expect(detectNotionObject(client, "bad-id")).rejects.toThrow(
-			"Could not find a Notion page or database with ID"
-		);
-	});
-});

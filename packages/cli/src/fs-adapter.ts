@@ -26,4 +26,9 @@ export const nodeFs: FileSystem = {
 		const entries = await readdir(resolve(dir));
 		return entries.filter((e: string) => e.endsWith(".md"));
 	},
+
+	listDirectories: async (dir: string) => {
+		const entries = await readdir(resolve(dir), { withFileTypes: true });
+		return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+	},
 };

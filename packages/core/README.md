@@ -1,34 +1,102 @@
 # @notion-sync/core
 
-Platform-agnostic sync engine. Contains all business logic for fetching Notion content and writing Markdown files. Has zero platform imports -- no `node:fs`, no `vscode`.
+Platform-agnostic sync engine. Contains all business logic for fetching Notion databases and writing Markdown files. Has zero platform imports -- no `node:fs`, no `vscode`.
 
 ## What it does
 
-1. Connects to the Notion API and fetches pages or database entries
+1. Connects to the Notion API and fetches database entries
 2. Converts 30+ Notion block types to Markdown
 3. Maps Notion properties (text, number, select, date, etc.) to YAML frontmatter
 4. Writes `.md` files with frontmatter + Markdown body
 5. Tracks changes via `last_edited_time` for incremental sync
 6. Marks deleted database entries with `notion-deleted: true` in frontmatter
 
+## Public API
+
+### Orchestration Functions
+
+```typescript
+// First-time import -- processes all entries
+freshDatabaseImport(options: DatabaseImportOptions, onProgress?: ProgressCallback): Promise<DatabaseFreezeResult>
+
+// Incremental update -- only processes changed entries (reads metadata from _database.json)
+refreshDatabase(options: RefreshOptions, onProgress?: ProgressCallback): Promise<DatabaseFreezeResult>
+
+// List all synced databases in a folder
+listSyncedDatabases(fs: FileSystem, outputFolder: string): Promise<FrozenDatabase[]>
+
+// Read database metadata from a folder
+readDatabaseMetadata(fs: FileSystem, folderPath: string): Promise<FrozenDatabase | null>
+```
+
+### Types
+
+```typescript
+interface DatabaseImportOptions {
+  client: Client;           // Notion SDK client
+  fs: FileSystem;           // Platform filesystem adapter
+  fm: FrontmatterReader;    // Frontmatter parser
+  databaseId: string;       // Notion database ID
+  outputFolder: string;     // Where to write files
+}
+
+interface RefreshOptions {
+  client: Client;           // Notion SDK client
+  fs: FileSystem;           // Platform filesystem adapter
+  fm: FrontmatterReader;    // Frontmatter parser
+  folderPath: string;       // Path to synced database folder
+}
+
+interface FrozenDatabase {
+  databaseId: string;
+  title: string;
+  folderPath: string;
+  lastSyncedAt: string;     // ISO timestamp
+  entryCount: number;
+}
+
+type ProgressPhase =
+  | { phase: "querying" }
+  | { phase: "diffing"; total: number }
+  | { phase: "stale-detected"; stale: number; total: number }
+  | { phase: "importing"; current: number; total: number; title: string }
+  | { phase: "complete" };
+```
+
+### Metadata file
+
+Each synced database folder contains a `_database.json` file storing metadata:
+
+```json
+{
+  "databaseId": "abc123...",
+  "title": "My Database",
+  "folderPath": "notion/My Database",
+  "lastSyncedAt": "2024-01-15T10:00:00.000Z",
+  "entryCount": 42
+}
+```
+
+This enables `refreshDatabase()` to work from just a folder path without needing external state.
+
 ## Source files
 
 | File | Purpose |
 |------|---------|
-| `types.ts` | Core interfaces: `FileSystem`, `FrontmatterReader`, `FreezeOptions`, and result types. This is the contract that platform adapters implement. |
-| `notion-client.ts` | `createNotionClient()` creates a Notion SDK client. `notionRequest()` wraps every API call with rate limiting (340ms between requests) and retry with exponential backoff + jitter. `normalizeNotionId()` parses URLs and hex strings into UUIDs. `detectNotionObject()` determines if an ID is a page or database. |
-| `block-converter.ts` | `convertBlocksToMarkdown()` converts Notion blocks to Markdown. Handles paragraphs, headings, lists, to-dos, toggles, code blocks, images, tables, callouts, quotes, dividers, embeds, and more. `convertRichText()` handles bold, italic, strikethrough, code, links, and colors. |
-| `page-freezer.ts` | `freezePage()` fetches a single page, builds YAML frontmatter (including all database properties if it's a database entry), converts blocks to Markdown, and writes the file. Returns `created`, `updated`, or `skipped`. |
-| `database-freezer.ts` | `freezeDatabase()` queries all entries in a database (paginated via `dataSources.query()`), freezes each page, and marks locally-tracked pages that no longer appear in the query as deleted. |
-| `frontmatter.ts` | `createFrontmatterReader()` builds a `FrontmatterReader` from any `FileSystem`. Shared by both CLI and VS Code adapters. |
-| `utils.ts` | `sanitizeFileName()` strips invalid filename characters. `joinPath()` joins path segments with `/`. |
-| `index.ts` | Barrel file re-exporting the public API. |
+| `types.ts` | Core interfaces: `FileSystem`, `FrontmatterReader`, `ProgressPhase`, and result types. |
+| `notion-client.ts` | `createNotionClient()`, `notionRequest()` with rate limiting + retry, `normalizeNotionId()`. |
+| `database-freezer.ts` | `freshDatabaseImport()` and `refreshDatabase()` orchestration functions. |
+| `page-freezer.ts` | `freezePage()` (internal) -- fetches blocks, builds frontmatter, writes file. |
+| `block-converter.ts` | `convertBlocksToMarkdown()` -- handles 30+ block types. |
+| `frontmatter.ts` | `createFrontmatterReader()` factory. |
+| `utils.ts` | `sanitizeFileName()`, `joinPath()`. |
+| `index.ts` | Public exports. |
 
 ## Key patterns
 
 ### Dependency injection
 
-Core never touches the filesystem directly. Platform-specific behavior comes in through two interfaces:
+Core never touches the filesystem directly:
 
 ```typescript
 interface FileSystem {
@@ -37,6 +105,7 @@ interface FileSystem {
   fileExists(path: string): Promise<boolean>;
   mkdir(path: string, recursive?: boolean): Promise<void>;
   listMarkdownFiles(dir: string): Promise<string[]>;
+  listDirectories(dir: string): Promise<string[]>;
 }
 
 interface FrontmatterReader {
@@ -44,47 +113,31 @@ interface FrontmatterReader {
 }
 ```
 
-The CLI implements these with `node:fs/promises`. VS Code implements them with `vscode.workspace.fs`. Tests use in-memory mocks.
-
 ### Rate limiting and retry
 
-`notionRequest()` enforces a 340ms minimum interval between API calls (~3 req/s) and retries on 429, 500, 502, 503, 504 with exponential backoff. Jitter of +/-25% prevents thundering herd. Maximum 5 retries, max 30s delay.
+`notionRequest()` enforces 340ms between API calls (~3 req/s) and retries on 429, 500, 502, 503, 504 with exponential backoff + jitter.
 
 ### Incremental sync
 
-`freezePage()` reads the existing file's frontmatter and compares `notion-last-edited` to the page's `last_edited_time`. If they match, it returns `skipped` without fetching blocks.
+`refreshDatabase()` compares `notion-last-edited` in local frontmatter against the entry's `last_edited_time`. Unchanged entries are skipped entirely.
 
-### Deletion tracking
-
-`freezeDatabase()` scans local `.md` files, reads their `notion-id` from frontmatter, and compares against the set of IDs returned by the database query. Missing IDs get `notion-deleted: true` injected into their frontmatter.
+---
 
 ## Development
 
 ```sh
-# Build
-npm run build -w packages/core
-
-# Test
-npm run test -w packages/core
-
-# Build + test
-npm run build -w packages/core && npm run test -w packages/core
-```
-
-After editing core, rebuild before testing CLI or VS Code:
-
-```sh
-npm run build:core
+npm run build -w packages/core   # Build
+npm run test -w packages/core    # Test (83 tests)
 ```
 
 ### Adding a new block type
 
-1. Add a case to `convertBlocksToMarkdown()` in `block-converter.ts`
-2. Add test cases in `packages/core/tests/block-converter.test.ts`
-3. Run `npm test` to verify
+1. Add case to `convertBlocksToMarkdown()` in `block-converter.ts`
+2. Add tests in `tests/block-converter.test.ts`
+3. Run `npm test`
 
 ### Adding a new property type
 
-1. Add a case to `mapPropertiesToFrontmatter()` in `page-freezer.ts`
-2. Add test cases in `packages/core/tests/page-freezer.test.ts`
-3. Run `npm test` to verify
+1. Add case to `mapPropertiesToFrontmatter()` in `page-freezer.ts`
+2. Add tests in `tests/page-freezer.test.ts`
+3. Run `npm test`

@@ -1,50 +1,142 @@
 # notion-sync
 
-Monorepo that syncs Notion pages and databases to local Markdown files with YAML frontmatter. Three packages share one core library.
+Monorepo that syncs Notion databases to local Markdown files with YAML frontmatter.
 
-## Repo layout
+## Quick Start (for agents)
+
+```sh
+npm install          # install deps
+npm run build        # build all packages
+npm run test         # run tests (83 tests in core)
+```
+
+## Repo Layout
 
 ```
 packages/
-  core/     @notion-sync/core  — platform-agnostic sync engine (all business logic)
-  cli/      notion-sync        — CLI wrapper wiring node:fs to core
-  vscode/   notion-sync-vscode — VS Code extension wiring vscode.workspace.fs to core
+  core/     @notion-sync/core       Platform-agnostic sync engine (all business logic)
+  cli/      notion-sync             CLI tool using node:fs
+  vscode/   notion-sync-vscode      VS Code extension using vscode.workspace.fs
 ```
 
-## Commands
-
-```sh
-npm run build          # build all 3 packages (tsc for core/cli, esbuild for vscode)
-npm run test           # run core unit tests (vitest)
-npm run build:core     # build only core
-npm run build:cli      # build only cli
-npm run build:vscode   # build only vscode extension
-```
+---
 
 ## Architecture
 
-Core is platform-agnostic. It never imports `node:fs`, `vscode`, or any platform API directly. Platform-specific behaviour is injected via two interfaces defined in `packages/core/src/types.ts`:
+### Data Flow
 
-- **`FileSystem`** — readFile, writeFile, fileExists, mkdir, listMarkdownFiles
-- **`FrontmatterReader`** — readFrontmatter (parse YAML between `---` markers)
+```
+Notion Database
+       ↓
+freshDatabaseImport() or refreshDatabase()
+       ↓
+   freezePage() (per entry)
+       ↓
+   .md files with YAML frontmatter
+```
 
-Each consumer (CLI, VS Code) provides its own implementation of these interfaces.
+### Dependency Injection
 
-## Key design decisions
+Core never touches the filesystem directly. Platform adapters implement two interfaces:
 
-- The Notion client uses `client.dataSources.query()` (not `databases.query()`) for database entries. This is a newer Notion API.
-- Core uses forward-slash paths internally. Platform adapters resolve to OS-native paths.
-- YAML frontmatter is serialized manually (not via a library) to control formatting. The `yaml` npm package is used only for *parsing* frontmatter.
-- Incremental sync via `last_edited_time` comparison — skips pages that haven't changed.
-- Deletion tracking marks files with `notion-deleted: true` in frontmatter rather than deleting them.
+```typescript
+interface FileSystem {
+  readFile, writeFile, fileExists, mkdir, listMarkdownFiles, listDirectories
+}
+
+interface FrontmatterReader {
+  readFrontmatter(filePath): Promise<Record<string, unknown> | null>
+}
+```
+
+- **CLI** implements with `node:fs/promises`
+- **VS Code** implements with `vscode.workspace.fs`
+- **Tests** use in-memory mocks
+
+### Orchestration Functions
+
+| Function | Use Case | Behavior |
+|----------|----------|----------|
+| `freshDatabaseImport()` | First-time import | Imports all entries, writes `_database.json` |
+| `refreshDatabase()` | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
+| `listSyncedDatabases()` | Discovery | Scans folder for `_database.json` files |
+| `readDatabaseMetadata()` | Single folder | Reads `_database.json` from a folder |
+
+### Metadata File
+
+Each synced database folder contains `_database.json`:
+```json
+{ "databaseId": "...", "title": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
+```
+This allows `refreshDatabase()` to work from just a folder path without external state.
+
+### Progress Phases
+
+Progress callback reports: `querying` → `diffing` → `stale-detected` → `importing` → `complete`
+
+---
+
+## Key Code Locations
+
+| To understand... | Look at... |
+|------------------|------------|
+| Core public API | `packages/core/src/index.ts` |
+| Types & interfaces | `packages/core/src/types.ts` |
+| Database sync logic | `packages/core/src/database-freezer.ts` |
+| Page/entry processing | `packages/core/src/page-freezer.ts` |
+| Block → Markdown | `packages/core/src/block-converter.ts` |
+| Rate limiting & retry | `packages/core/src/notion-client.ts` |
+| CLI commands | `packages/cli/src/main.ts` |
+| VS Code commands | `packages/vscode/src/commands.ts` |
+
+---
+
+## Key Design Decisions
+
+- **Database-only sync** — no individual page syncing
+- **Metadata file** — `_database.json` in each folder stores databaseId, title, last sync time
+- **Notion dataSources API** — uses `client.dataSources.query()` (not `databases.query()`)
+- **Forward-slash paths** — core uses `/` internally; adapters resolve to OS paths
+- **Manual YAML serialization** — `yaml` package used only for *parsing*
+- **Soft deletes** — removed entries get `notion-deleted: true` in frontmatter
+- **Incremental sync** — compares `notion-last-edited` timestamps
+
+---
+
+## Common Tasks
+
+### Add a new Notion block type
+
+1. Add case to `convertBlocksToMarkdown()` in `packages/core/src/block-converter.ts`
+2. Add tests in `packages/core/tests/block-converter.test.ts`
+3. Run `npm test`
+
+### Add a new property type
+
+1. Add case to `mapPropertiesToFrontmatter()` in `packages/core/src/page-freezer.ts`
+2. Add tests in `packages/core/tests/page-freezer.test.ts`
+3. Run `npm test`
+
+### Modify progress reporting
+
+1. Update `ProgressPhase` type in `packages/core/src/types.ts`
+2. Update phase emissions in `packages/core/src/database-freezer.ts`
+3. Update `formatProgress()` in CLI (`packages/cli/src/main.ts`) and VS Code (`packages/vscode/src/commands.ts`)
+
+---
 
 ## Dependencies
 
-- `@notionhq/client` ^5.3.0 — Notion SDK (core)
-- `yaml` ^2.7.0 — YAML parsing for frontmatter (core, cli, vscode)
-- `vitest` ^3.0.0 — testing (core devDep)
-- `esbuild` ^0.25.0 — bundling (vscode devDep)
+| Package | Version | Used by |
+|---------|---------|---------|
+| `@notionhq/client` | ^5.3.0 | core |
+| `yaml` | ^2.7.0 | core |
+| `@napi-rs/keyring` | ^1.1.0 | cli |
+| `vitest` | ^3.0.0 | core (dev) |
+| `esbuild` | ^0.25.0 | vscode (dev) |
+
+---
 
 ## Origin
 
-Extracted from the Obsidian plugin [obsidian-notion-database-sync](https://github.com/ran-codes/obsidian-notion-database-sync). The ADR is at `.claude/reference/v0.1/initial-ideas.md`.
+Extracted from [obsidian-notion-database-sync](https://github.com/ran-codes/obsidian-notion-database-sync).

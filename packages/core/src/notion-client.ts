@@ -1,5 +1,4 @@
 import { Client } from "@notionhq/client";
-import { DetectionResult } from "./types.js";
 
 export function createNotionClient(apiKey: string): Client {
 	return new Client({ auth: apiKey });
@@ -98,27 +97,3 @@ export function normalizeNotionId(input: string): string {
 	].join("-");
 }
 
-/**
- * Tries pages.retrieve() first, falls back to databases.retrieve().
- */
-export async function detectNotionObject(
-	client: Client,
-	id: string
-): Promise<DetectionResult> {
-	try {
-		await notionRequest(() => client.pages.retrieve({ page_id: id }));
-		return { type: "page", id };
-	} catch {
-		// Fall through to try database
-	}
-
-	try {
-		await notionRequest(() => client.databases.retrieve({ database_id: id }));
-		return { type: "database", id };
-	} catch {
-		throw new Error(
-			`Could not find a Notion page or database with ID: ${id}. ` +
-			`Make sure the integration has access to this content.`
-		);
-	}
-}

@@ -1,8 +1,8 @@
 # notion-sync
 
-Sync Notion pages and databases to local Markdown files with YAML frontmatter. Works as a CLI tool or a VS Code extension.
+Sync Notion databases to local Markdown files with YAML frontmatter. Works as a CLI tool or a VS Code extension.
 
-Given a Notion page or database URL, notion-sync fetches the content via the Notion API and writes it to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and (for database entries) all property values. On subsequent runs it compares `last_edited_time` and only re-syncs pages that changed.
+Given a Notion database URL, notion-sync fetches all entries via the Notion API and writes them to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and all property values. On subsequent runs it compares `last_edited_time` and only re-syncs entries that changed.
 
 ## Architecture
 
@@ -39,7 +39,7 @@ packages/
 
 - **Node.js** >= 18
 - **npm** >= 9 (ships with Node)
-- A **Notion integration** with access to the pages/databases you want to sync
+- A **Notion integration** with access to the databases you want to sync
 
 ### Creating a Notion integration
 
@@ -47,10 +47,12 @@ packages/
 2. Click "New integration"
 3. Give it a name (e.g. "notion-sync") and select a workspace
 4. Copy the **Internal Integration Secret** (starts with `ntn_`)
-5. In Notion, open the page or database you want to sync
+5. In Notion, open the database you want to sync
 6. Click the `...` menu > "Connections" > add your integration
 
 ## Quick start
+
+**All commands run from the repo root** — don't `cd` into package subdirectories.
 
 ```sh
 # Clone and install
@@ -61,14 +63,20 @@ npm install
 # Build all packages
 npm run build
 
-# Sync a Notion page
-node packages/cli/dist/main.js sync <notion-url-or-id> \
+# Sync a Notion database
+node packages/cli/dist/main.js sync <database-url-or-id> \
   --api-key <your-api-key> \
   --output ./out
 
-# Or save your API key first
+# Or save your API key (stored in OS keychain)
 node packages/cli/dist/main.js config set apiKey <your-api-key>
-node packages/cli/dist/main.js sync <notion-url-or-id> --output ./out
+node packages/cli/dist/main.js sync <database-url-or-id> --output ./out
+
+# Refresh an existing sync (incremental update)
+node packages/cli/dist/main.js refresh ./out/MyDatabase
+
+# List synced databases
+node packages/cli/dist/main.js list ./out
 ```
 
 ## Commands
@@ -78,7 +86,7 @@ npm run build          # Build all 3 packages
 npm run build:core     # Build only core (tsc)
 npm run build:cli      # Build only CLI (tsc)
 npm run build:vscode   # Build only VS Code extension (esbuild)
-npm run test           # Run core unit tests (vitest, 76 tests)
+npm run test           # Run core unit tests (vitest, 83 tests)
 ```
 
 ## Package documentation
@@ -89,8 +97,10 @@ npm run test           # Run core unit tests (vitest, 76 tests)
 
 ## Key design decisions
 
-- **Incremental sync** -- compares `last_edited_time` from frontmatter and skips unchanged pages
-- **Soft deletes** -- pages removed from a Notion database get `notion-deleted: true` in their frontmatter rather than being deleted from disk
+- **Incremental sync** -- compares `last_edited_time` from frontmatter and skips unchanged entries
+- **Soft deletes** -- entries removed from a Notion database get `notion-deleted: true` in their frontmatter rather than being deleted from disk
+- **Two orchestration functions** -- `freshDatabaseImport()` for first-time imports, `refreshDatabase()` for incremental updates with diff-based optimization
+- **Database metadata file** -- each synced database folder contains `_database.json` with metadata (database ID, title, last sync time, entry count), enabling `refreshDatabase()` to work from just a folder path
 - **Forward-slash paths** -- core always uses `/` as the path separator; platform adapters resolve to OS-native paths
 - **Manual YAML serialization** -- frontmatter is written with hand-rolled code for precise formatting; the `yaml` package is used only for parsing
 - **Newer Notion API** -- database entries are queried via `client.dataSources.query()` (not `databases.query()`) to get full property data
@@ -101,6 +111,7 @@ npm run test           # Run core unit tests (vitest, 76 tests)
 |---------|---------|---------|
 | `@notionhq/client` | ^5.3.0 | core |
 | `yaml` | ^2.7.0 | core |
+| `@napi-rs/keyring` | ^1.1.0 | cli |
 | `vitest` | ^3.0.0 | core (dev) |
 | `esbuild` | ^0.25.0 | vscode (dev) |
 

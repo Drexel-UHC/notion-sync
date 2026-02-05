@@ -7,6 +7,7 @@ export interface FileSystem {
 	fileExists(path: string): Promise<boolean>;
 	mkdir(path: string, recursive?: boolean): Promise<void>;
 	listMarkdownFiles(dir: string): Promise<string[]>;
+	listDirectories(dir: string): Promise<string[]>;
 }
 
 export interface FrontmatterReader {
@@ -22,10 +23,6 @@ export interface FreezeFrontmatter {
 	"notion-deleted"?: boolean;
 	[key: string]: unknown;
 }
-
-export type DetectionResult =
-	| { type: "page"; id: string }
-	| { type: "database"; id: string };
 
 export interface FreezeOptions {
 	client: Client;
@@ -46,6 +43,7 @@ export interface PageFreezeResult {
 export interface DatabaseFreezeResult {
 	title: string;
 	folderPath: string;
+	total: number;
 	created: number;
 	updated: number;
 	skipped: number;
@@ -54,4 +52,22 @@ export interface DatabaseFreezeResult {
 	errors: string[];
 }
 
-export type ProgressCallback = (current: number, total: number, title: string) => void;
+export type ProgressPhase =
+	| { phase: "querying" }
+	| { phase: "diffing"; total: number }
+	| { phase: "stale-detected"; stale: number; total: number }
+	| { phase: "importing"; current: number; total: number; title: string }
+	| { phase: "complete" };
+
+export type ProgressCallback = (progress: ProgressPhase) => void;
+
+export interface FrozenDatabase {
+	databaseId: string;
+	title: string;
+	url: string;
+	folderPath: string;
+	lastSyncedAt: string;
+	entryCount: number;
+}
+
+export const DATABASE_METADATA_FILE = "_database.json";

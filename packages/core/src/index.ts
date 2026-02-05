@@ -2,15 +2,18 @@ export {
 	createNotionClient,
 	notionRequest,
 	normalizeNotionId,
-	detectNotionObject,
 } from "./notion-client.js";
 
 export {
-	freezePage,
-} from "./page-freezer.js";
+	freshDatabaseImport,
+	refreshDatabase,
+	listSyncedDatabases,
+	readDatabaseMetadata,
+} from "./database-freezer.js";
 
-export {
-	freezeDatabase,
+export type {
+	DatabaseImportOptions,
+	RefreshOptions,
 } from "./database-freezer.js";
 
 export {
@@ -28,13 +31,16 @@ export {
 	joinPath,
 } from "./utils.js";
 
+export {
+	DATABASE_METADATA_FILE,
+} from "./types.js";
+
 export type {
 	FileSystem,
 	FrontmatterReader,
 	FreezeFrontmatter,
-	FreezeOptions,
-	PageFreezeResult,
 	DatabaseFreezeResult,
-	DetectionResult,
+	FrozenDatabase,
+	ProgressPhase,
 	ProgressCallback,
 } from "./types.js";
