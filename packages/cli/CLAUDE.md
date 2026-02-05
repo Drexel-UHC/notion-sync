@@ -1,30 +1,48 @@
-# notion-sync CLI
+# notion-sync CLI (Legacy TypeScript)
 
-Thin CLI wrapper that wires `node:fs` to core's `FileSystem` and `FrontmatterReader` interfaces.
+> **Note:** This is the legacy TypeScript implementation. The primary implementation is now in Go at `go/`. This package is kept as a backup/reference.
 
-## Source files
+Thin CLI wrapper. Wires `node:fs` to core's `FileSystem` interface.
 
-| File | Purpose |
-|------|---------|
-| `main.ts` | Entry point. Parses args via `node:util parseArgs`. Commands: `sync`, `resync`, `config set`. |
-| `fs-adapter.ts` | `nodeFs: FileSystem` — uses `node:fs/promises`. Resolves forward-slash paths from core via `path.resolve()`. |
-| `frontmatter-adapter.ts` | `nodeFm: FrontmatterReader` — reads file, extracts YAML between `---` markers, parses with `yaml` package. |
-| `config.ts` | Read/write `~/.notion-sync.json` (or `$XDG_CONFIG_HOME/notion-sync/config.json`). Env var `NOTION_SYNC_API_KEY` overrides file. |
-
-## CLI usage
+## Build & Run
 
 ```sh
-notion-sync sync <url-or-id> [--output <folder>] [--api-key <key>]
-notion-sync resync <path> [--api-key <key>]
+npm install
+npm run build -w packages/cli
+node packages/cli/dist/main.js --help
+```
+
+## Commands
+
+```sh
+notion-sync sync <database-url-or-id> [--output <folder>] [--api-key <key>]
+notion-sync refresh <database-folder> [--force] [--api-key <key>]
+notion-sync list [<output-folder>]
 notion-sync config set <key> <value>
 ```
 
-Exit codes: 0 success, 1 general error, 2 auth error.
+| Command | Purpose |
+|---------|---------|
+| `sync` | First-time import of a Notion database |
+| `refresh` | Incremental update (only changed entries) |
+| `refresh --force` | Full resync ignoring timestamps |
+| `list` | Show all synced databases in a folder |
+| `config set apiKey <key>` | Store API key in OS keychain |
 
-## Build
+Exit codes: `0` success, `1` general error, `2` auth error
 
-```sh
-npm run build -w packages/cli    # tsc
-```
+## Source Files
 
-The `bin` field points to `./dist/main.js` with a `#!/usr/bin/env node` shebang.
+| File | Purpose |
+|------|---------|
+| `main.ts` | Entry point, arg parsing (`node:util parseArgs`), command routing |
+| `fs-adapter.ts` | `nodeFs: FileSystem` using `node:fs/promises` |
+| `frontmatter-adapter.ts` | `nodeFm: FrontmatterReader` using `yaml` package |
+| `config.ts` | API key storage (OS keychain via `@napi-rs/keyring`), config file I/O |
+
+## API Key Priority
+
+1. `--api-key` CLI flag
+2. `NOTION_SYNC_API_KEY` env var
+3. OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service)
+4. Config file fallback (`~/.notion-sync.json`) with warning

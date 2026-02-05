@@ -1,4 +1,6 @@
-# notion-sync (CLI)
+# notion-sync CLI (Legacy TypeScript)
+
+> **Note:** This is the legacy TypeScript implementation. The primary implementation is now in Go at `go/`. This package is kept as a backup/reference.
 
 Command-line tool for syncing Notion databases to local Markdown files. Thin wrapper that connects `node:fs` to the `@notion-sync/core` engine.
 

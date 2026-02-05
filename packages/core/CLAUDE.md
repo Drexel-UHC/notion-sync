@@ -1,33 +1,84 @@
-# @notion-sync/core
+# @notion-sync/core (Legacy TypeScript)
 
-Platform-agnostic sync engine. Contains all business logic. Zero platform imports.
+> **Note:** This is the legacy TypeScript implementation. The primary implementation is now in Go at `go/`. This package is kept as a backup/reference.
 
-## Source files
+Platform-agnostic sync engine. All business logic lives here. Zero platform imports (`node:fs`, etc.).
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `types.ts` | ~60 | `FileSystem`, `FrontmatterReader` interfaces, `FreezeOptions`, result types |
-| `notion-client.ts` | ~120 | `createNotionClient()`, `notionRequest()` (throttle + retry + backoff), `normalizeNotionId()`, `detectNotionObject()` |
-| `block-converter.ts` | ~420 | `convertBlocksToMarkdown()` — 30+ Notion block types to Markdown. Pure logic, no side effects. |
-| `page-freezer.ts` | ~190 | `freezePage()` — fetch page, build frontmatter, write Markdown. Maps 16 property types. |
-| `database-freezer.ts` | ~140 | `freezeDatabase()` — paginate entries, freeze each page, track deletions. |
-| `index.ts` | barrel | Re-exports public API |
+## Quick Reference
 
-## Testing
+```typescript
+// First-time import
+freshDatabaseImport({ client, fs, fm, databaseId, outputFolder }, onProgress?)
 
-```sh
-npm run test    # vitest run
+// Incremental update (reads _database.json)
+refreshDatabase({ client, fs, fm, folderPath, force? }, onProgress?)
+
+// Discovery
+listSyncedDatabases(fs, outputFolder)
+readDatabaseMetadata(fs, folderPath)
 ```
 
-76 tests across 4 files. Tests mock `FileSystem`, `FrontmatterReader`, and Notion `Client`. The `notionRequest` mock skips throttle/retry.
+## Build & Test
 
-Block-converter tests are the highest value — 45 tests covering all supported block types and rich text formatting.
+```sh
+npm install
+npm run build -w packages/core
+npm run test -w packages/core    # 83 tests
+```
 
-## Important patterns
+## Source Files
 
-- `notionRequest()` wraps every Notion API call with rate limiting (340ms between requests) and retry with exponential backoff + jitter. Module-level `lastRequestTime` state is intentional.
-- `freezePage()` takes a `FreezeOptions` object with `client`, `fs`, `fm`, `outputFolder`, `notionId`, and optional `databaseId`.
-- `freezeDatabase()` uses `client.dataSources.query()` (NOT `databases.query()`). This is a newer Notion API that returns full property data for entries.
-- YAML serialization in `page-freezer.ts` is manual (`buildFileContent`, `formatYamlEntry`, `yamlEscapeString`). Strings containing `:`, `#`, quotes, or looking like booleans/numbers get double-quoted.
-- `scanLocalFiles()` in database-freezer returns `Map<notionId, filePath>` by reading frontmatter from each `.md` file in the database folder.
-- `markAsDeleted()` inserts `notion-deleted: true` into existing frontmatter via string manipulation (not re-serialization).
+| File | Purpose |
+|------|---------|
+| `types.ts` | `FileSystem`, `FrontmatterReader` interfaces, `ProgressPhase`, result types |
+| `database-freezer.ts` | `freshDatabaseImport()`, `refreshDatabase()`, `listSyncedDatabases()` |
+| `page-freezer.ts` | `freezePage()` — fetch blocks, build frontmatter, write .md file |
+| `block-converter.ts` | `convertBlocksToMarkdown()` — 30+ block types to Markdown |
+| `notion-client.ts` | `createNotionClient()`, `notionRequest()` (throttle + retry) |
+| `frontmatter.ts` | `createFrontmatterReader()` factory |
+| `utils.ts` | `sanitizeFileName()`, `joinPath()` |
+| `index.ts` | Public exports |
+
+## Key Interfaces
+
+```typescript
+interface FileSystem {
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  fileExists(path: string): Promise<boolean>;
+  mkdir(path: string, recursive?: boolean): Promise<void>;
+  listMarkdownFiles(dir: string): Promise<string[]>;
+  listDirectories(dir: string): Promise<string[]>;
+}
+
+interface FrontmatterReader {
+  readFrontmatter(filePath: string): Promise<Record<string, unknown> | null>;
+}
+```
+
+## Important Patterns
+
+### Rate Limiting
+`notionRequest()` wraps every Notion API call with:
+- 340ms minimum between requests (~3 req/s)
+- Retry with exponential backoff + jitter on 429, 500, 502, 503, 504
+
+### Notion API
+Uses `client.dataSources.query()` (NOT `databases.query()`).
+
+### YAML Serialization
+Manual serialization in `page-freezer.ts`. Strings containing `:`, `#`, quotes get double-quoted.
+
+---
+
+## Common Tasks
+
+### Add a new block type
+1. Add case to `convertBlocksToMarkdown()` in `block-converter.ts`
+2. Add tests in `tests/block-converter.test.ts`
+3. `npm test`
+
+### Add a new property type
+1. Add case to `mapPropertiesToFrontmatter()` in `page-freezer.ts`
+2. Add tests in `tests/page-freezer.test.ts`
+3. `npm test`

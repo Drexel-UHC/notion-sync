@@ -5,18 +5,31 @@ CLI tool that syncs Notion databases to local Markdown files with YAML frontmatt
 ## Quick Start (for agents)
 
 ```sh
-npm install          # install deps
-npm run build        # build all packages
-npm run test         # run tests (83 tests in core)
+cd go
+go build ./cmd/notion-sync    # build binary
+go test ./...                 # run tests
 ```
 
 ## Repo Layout
 
 ```
-packages/
-  core/     @notion-sync/core       Platform-agnostic sync engine (all business logic)
-  cli/      notion-sync             CLI tool using node:fs
+go/                           # Go implementation (primary)
+├── cmd/notion-sync/          # CLI entry point
+└── internal/
+    ├── notion/               # API client
+    ├── sync/                 # Core sync logic
+    ├── markdown/             # Block → Markdown
+    ├── frontmatter/          # YAML handling
+    └── config/               # Keyring + config
+
+packages/                     # TypeScript (legacy backup)
+├── core/                     # Sync engine
+└── cli/                      # Node CLI
 ```
+
+**Go docs:** `go/CLAUDE.md` — implementation details, how to add block/property types
+
+**Legacy TypeScript docs:** `packages/core/CLAUDE.md`, `packages/cli/CLAUDE.md`
 
 ---
 
@@ -27,39 +40,21 @@ packages/
 ```
 Notion Database
        ↓
-freshDatabaseImport() or refreshDatabase()
+FreshDatabaseImport() or RefreshDatabase()
        ↓
-   freezePage() (per entry)
+   FreezePage() (per entry)
        ↓
    .md files with YAML frontmatter
 ```
 
-### Dependency Injection
-
-Core never touches the filesystem directly. Platform adapters implement two interfaces:
-
-```typescript
-interface FileSystem {
-  readFile, writeFile, fileExists, mkdir, listMarkdownFiles, listDirectories
-}
-
-interface FrontmatterReader {
-  readFrontmatter(filePath): Promise<Record<string, unknown> | null>
-}
-```
-
-- **CLI** implements with `node:fs/promises`
-- **Tests** use in-memory mocks
-
-### Orchestration Functions
+### Key Functions
 
 | Function | Use Case | Behavior |
 |----------|----------|----------|
-| `freshDatabaseImport()` | First-time import | Imports all entries, writes `_database.json` |
-| `refreshDatabase()` | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
-| `refreshDatabase({ force: true })` | Full resync | Ignores timestamps, resyncs all entries |
-| `listSyncedDatabases()` | Discovery | Scans folder for `_database.json` files |
-| `readDatabaseMetadata()` | Single folder | Reads `_database.json` from a folder |
+| `FreshDatabaseImport()` | First-time import | Imports all entries, writes `_database.json` |
+| `RefreshDatabase()` | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
+| `RefreshDatabase(force=true)` | Full resync | Ignores timestamps, resyncs all entries |
+| `ListSyncedDatabases()` | Discovery | Scans folder for `_database.json` files |
 
 ### Metadata File
 
@@ -67,7 +62,6 @@ Each synced database folder contains `_database.json`:
 ```json
 { "databaseId": "...", "title": "...", "url": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
 ```
-This allows `refreshDatabase()` to work from just a folder path without external state.
 
 ### Progress Phases
 
@@ -75,17 +69,19 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 
 ---
 
-## Key Code Locations
+## Key Code Locations (Go)
 
 | To understand... | Look at... |
 |------------------|------------|
-| Core public API | `packages/core/src/index.ts` |
-| Types & interfaces | `packages/core/src/types.ts` |
-| Database sync logic | `packages/core/src/database-freezer.ts` |
-| Page/entry processing | `packages/core/src/page-freezer.ts` |
-| Block → Markdown | `packages/core/src/block-converter.ts` |
-| Rate limiting & retry | `packages/core/src/notion-client.ts` |
-| CLI commands | `packages/cli/src/main.ts` |
+| CLI entry point | `go/cmd/notion-sync/main.go` |
+| Notion API client | `go/internal/notion/client.go` |
+| API response types | `go/internal/notion/types.go` |
+| Database sync logic | `go/internal/sync/database.go` |
+| Page/entry processing | `go/internal/sync/page.go` |
+| Block → Markdown | `go/internal/markdown/converter.go` |
+| Rich text handling | `go/internal/markdown/richtext.go` |
+| YAML frontmatter | `go/internal/frontmatter/` |
+| Config & keyring | `go/internal/config/` |
 
 ---
 
@@ -94,11 +90,11 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 - **Database-only sync** — no individual page syncing
 - **Metadata file** — `_database.json` in each folder stores databaseId, title, url, last sync time
 - **Force refresh** — `--force` flag bypasses timestamp checks (useful when database schema changes)
-- **Notion dataSources API** — uses `client.dataSources.query()` (not `databases.query()`)
-- **Forward-slash paths** — core uses `/` internally; adapters resolve to OS paths
-- **Manual YAML serialization** — `yaml` package used only for *parsing*
+- **Notion dataSources API** — uses `/data_sources/{id}/query` (not `/databases/{id}/query`)
+- **Manual YAML serialization** — `yaml` package used only for *parsing*; writing is manual for precise formatting
 - **Soft deletes** — removed entries get `notion-deleted: true` in frontmatter
 - **Incremental sync** — compares `notion-last-edited` timestamps
+- **No third-party Notion client** — thin REST wrapper for full control over rate limiting
 
 ---
 
@@ -106,35 +102,37 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 
 ### Add a new Notion block type
 
-1. Add case to `convertBlocksToMarkdown()` in `packages/core/src/block-converter.ts`
-2. Add tests in `packages/core/tests/block-converter.test.ts`
-3. Run `npm test`
+1. Add case to `convertBlock()` in `go/internal/markdown/converter.go`
+2. Add tests in `go/internal/markdown/converter_test.go`
+3. Run `go test ./...`
 
 ### Add a new property type
 
-1. Add case to `mapPropertiesToFrontmatter()` in `packages/core/src/page-freezer.ts`
-2. Add tests in `packages/core/tests/page-freezer.test.ts`
-3. Run `npm test`
+1. Add case to `mapPropertiesToFrontmatter()` in `go/internal/sync/page.go`
+2. Run `go test ./...`
 
 ### Modify progress reporting
 
-1. Update `ProgressPhase` type in `packages/core/src/types.ts`
-2. Update phase emissions in `packages/core/src/database-freezer.ts`
-3. Update `formatProgress()` in CLI (`packages/cli/src/main.ts`)
+1. Update `ProgressPhase` struct in `go/internal/sync/types.go`
+2. Update phase emissions in `go/internal/sync/database.go`
+3. Update `formatProgress()` in `go/cmd/notion-sync/main.go`
 
 ---
 
-## Dependencies
+## Dependencies (Go)
 
-| Package | Version | Used by |
-|---------|---------|---------|
-| `@notionhq/client` | ^5.3.0 | core |
-| `yaml` | ^2.7.0 | core |
-| `@napi-rs/keyring` | ^1.1.0 | cli |
-| `vitest` | ^3.0.0 | core (dev) |
+| Package | Used for |
+|---------|----------|
+| `github.com/zalando/go-keyring` | OS keychain access |
+| `gopkg.in/yaml.v3` | YAML parsing only |
 
 ---
 
-## Origin
+## Release
 
-Extracted from [obsidian-notion-database-sync](https://github.com/ran-codes/obsidian-notion-database-sync).
+Push a git tag (`v1.0.0`) to trigger GitHub Actions release workflow. Builds binaries for:
+- Windows amd64
+- macOS amd64, arm64
+- Linux amd64, arm64
+
+Install script: `curl -fsSL https://raw.githubusercontent.com/ran-codes/notion-sync/main/scripts/install.sh | bash`

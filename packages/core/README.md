@@ -1,4 +1,6 @@
-# @notion-sync/core
+# @notion-sync/core (Legacy TypeScript)
+
+> **Note:** This is the legacy TypeScript implementation. The primary implementation is now in Go at `go/`. This package is kept as a backup/reference.
 
 Platform-agnostic sync engine. Contains all business logic for fetching Notion databases and writing Markdown files. Has zero platform imports -- no `node:fs`.
 
