@@ -6,18 +6,17 @@ Given a Notion database ID, notion-sync fetches all entries via the Notion API a
 
 ## Install
 
-### Install script (recommended)
-
-**macOS / Linux** (or Windows Git Bash):
+### Install script (macOS / Linux)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ran-codes/notion-sync/main/scripts/install.sh | bash
 ```
 
-**Windows PowerShell:**
+### Scoop (Windows)
 
 ```powershell
-irm https://raw.githubusercontent.com/ran-codes/notion-sync/main/scripts/install.ps1 | iex
+scoop bucket add notion-sync https://github.com/ran-codes/notion-sync
+scoop install notion-sync
 ```
 
 ### Manual download
