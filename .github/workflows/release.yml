@@ -84,3 +84,27 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Scoop manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA256=$(grep 'notion-sync-windows-amd64.exe' release/checksums.txt | awk '{print $1}')
+
+          jq \
+            --arg ver "$VERSION" \
+            --arg hash "$SHA256" \
+            '.version = $ver | .architecture."64bit".url = "https://github.com/ran-codes/notion-sync/releases/download/v\($ver)/notion-sync-windows-amd64.exe" | .architecture."64bit".hash = $hash' \
+            bucket/notion-sync.json > bucket/notion-sync.json.tmp
+
+          mv bucket/notion-sync.json.tmp bucket/notion-sync.json
+
+      - name: Commit updated Scoop manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add bucket/notion-sync.json
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "scoop: update manifest to v${GITHUB_REF_NAME#v}"
+          git push origin main

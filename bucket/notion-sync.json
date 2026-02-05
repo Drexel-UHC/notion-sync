@@ -1,12 +1,12 @@
 {
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.",
     "homepage": "https://github.com/ran-codes/notion-sync",
     "license": "MIT",
     "architecture": {
         "64bit": {
-            "url": "https://github.com/ran-codes/notion-sync/releases/download/v0.1.0/notion-sync-windows-amd64.exe",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+            "url": "https://github.com/ran-codes/notion-sync/releases/download/v0.1.1/notion-sync-windows-amd64.exe",
+            "hash": "84f3bc756b7340769ab1258bd62a7b477a14b622f0b1d55cd872395ad2bfaf77"
         }
     },
     "bin": [
