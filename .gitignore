@@ -1,6 +1,18 @@
-node_modules/
-dist/
-*.tsbuildinfo
 .env
-*.vsix
 scratch/
+
+# Go binaries
+notion-sync
+notion-sync.exe
+*.test
+*.out
+
+# Build output
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
