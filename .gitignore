@@ -1,9 +1,9 @@
 .env
 scratch/
 
-# Go binaries
-notion-sync
-notion-sync.exe
+# Go binaries (root-level only, not cmd/notion-sync/ directory)
+/notion-sync
+/notion-sync.exe
 *.test
 *.out
 
