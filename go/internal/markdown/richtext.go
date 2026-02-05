@@ -8,15 +8,51 @@ import (
 )
 
 // ConvertRichText converts Notion rich text items to Markdown.
+// Bold and italic delimiters are placed at annotation boundaries (transitions)
+// to avoid garbled asterisks when adjacent segments share bold/italic state.
 func ConvertRichText(richTexts []notion.RichText) string {
-	var parts []string
-	for _, item := range richTexts {
-		parts = append(parts, convertRichTextItem(item))
+	var result strings.Builder
+
+	for i, item := range richTexts {
+		curr := item.Annotations
+
+		// Get prev/next bold/italic state
+		var prevBold, prevItalic, nextBold, nextItalic bool
+		if i > 0 {
+			prevBold = richTexts[i-1].Annotations.Bold
+			prevItalic = richTexts[i-1].Annotations.Italic
+		}
+		if i < len(richTexts)-1 {
+			nextBold = richTexts[i+1].Annotations.Bold
+			nextItalic = richTexts[i+1].Annotations.Italic
+		}
+
+		// Open delimiters (bold outside, italic inside)
+		if curr.Bold && !prevBold {
+			result.WriteString("**")
+		}
+		if curr.Italic && !prevItalic {
+			result.WriteString("*")
+		}
+
+		// Write text with non-colliding annotations applied
+		result.WriteString(convertRichTextContent(item))
+
+		// Close delimiters (italic inside, bold outside — reverse order)
+		if curr.Italic && !nextItalic {
+			result.WriteString("*")
+		}
+		if curr.Bold && !nextBold {
+			result.WriteString("**")
+		}
 	}
-	return strings.Join(parts, "")
+
+	return result.String()
 }
 
-func convertRichTextItem(item notion.RichText) string {
+// convertRichTextContent extracts text content and applies non-colliding annotations
+// (code, strikethrough, underline, highlight). Bold and italic are handled by ConvertRichText.
+func convertRichTextContent(item notion.RichText) string {
 	var text string
 
 	switch item.Type {
@@ -40,16 +76,10 @@ func convertRichTextItem(item notion.RichText) string {
 		}
 	}
 
-	// Apply annotations
+	// Apply non-colliding annotations only
 	a := item.Annotations
 	if a.Code {
 		text = fmt.Sprintf("`%s`", text)
-	}
-	if a.Bold {
-		text = fmt.Sprintf("**%s**", text)
-	}
-	if a.Italic {
-		text = fmt.Sprintf("*%s*", text)
 	}
 	if a.Strikethrough {
 		text = fmt.Sprintf("~~%s~~", text)

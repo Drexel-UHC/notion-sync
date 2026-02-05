@@ -46,24 +46,22 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 	safeName := util.SanitizeFileName(dbTitle)
 	folderPath := filepath.Join(opts.OutputFolder, safeName)
 
-	// Get the data source ID for querying entries
-	if len(database.DataSources) == 0 {
-		return nil, fmt.Errorf("this appears to be a linked database, which is not supported by the Notion API")
-	}
-	dataSourceID := database.DataSources[0].ID
-
-	// Verify access
-	if err := opts.Client.GetDataSource(dataSourceID); err != nil {
-		return nil, fmt.Errorf("verify data source access: %w", err)
-	}
-
 	// Create folder
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
 		return nil, fmt.Errorf("create folder: %w", err)
 	}
 
-	// Query all entries
-	entries, err := opts.Client.QueryAllEntries(dataSourceID)
+	// Query all entries — use data_sources API if available, otherwise fall back to classic endpoint
+	var entries []notion.Page
+	if len(database.DataSources) > 0 {
+		dataSourceID := database.DataSources[0].ID
+		if err := opts.Client.GetDataSource(dataSourceID); err != nil {
+			return nil, fmt.Errorf("verify data source access: %w", err)
+		}
+		entries, err = opts.Client.QueryAllEntries(dataSourceID)
+	} else {
+		entries, err = opts.Client.QueryAllEntriesFromDatabase(opts.DatabaseID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query entries: %w", err)
 	}
@@ -159,19 +157,17 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		dbTitle = "Untitled Database"
 	}
 
-	// Get the data source ID
-	if len(database.DataSources) == 0 {
-		return nil, fmt.Errorf("this appears to be a linked database, which is not supported by the Notion API")
+	// Query all entries — use data_sources API if available, otherwise fall back to classic endpoint
+	var entries []notion.Page
+	if len(database.DataSources) > 0 {
+		dataSourceID := database.DataSources[0].ID
+		if err := opts.Client.GetDataSource(dataSourceID); err != nil {
+			return nil, fmt.Errorf("verify data source access: %w", err)
+		}
+		entries, err = opts.Client.QueryAllEntries(dataSourceID)
+	} else {
+		entries, err = opts.Client.QueryAllEntriesFromDatabase(databaseID)
 	}
-	dataSourceID := database.DataSources[0].ID
-
-	// Verify access
-	if err := opts.Client.GetDataSource(dataSourceID); err != nil {
-		return nil, fmt.Errorf("verify data source access: %w", err)
-	}
-
-	// Query all entries
-	entries, err := opts.Client.QueryAllEntries(dataSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("query entries: %w", err)
 	}

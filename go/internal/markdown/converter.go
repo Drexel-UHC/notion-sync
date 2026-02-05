@@ -60,11 +60,15 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 		}
 		text := ConvertRichText(block.Heading1.RichText)
 		if block.Heading1.IsToggleable {
-			children, err := maybeConvertChildren(block, ctx)
+			childMd, err := maybeConvertChildren(block, ctx)
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("> [!note]+ # %s%s", text, children), nil
+			lines := strings.Split(childMd, "\n")
+			for i, line := range lines {
+				lines[i] = "> " + line
+			}
+			return fmt.Sprintf("> [!note]+ # %s\n%s", text, strings.Join(lines, "\n")), nil
 		}
 		return fmt.Sprintf("# %s", text), nil
 
@@ -74,11 +78,15 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 		}
 		text := ConvertRichText(block.Heading2.RichText)
 		if block.Heading2.IsToggleable {
-			children, err := maybeConvertChildren(block, ctx)
+			childMd, err := maybeConvertChildren(block, ctx)
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("> [!note]+ ## %s%s", text, children), nil
+			lines := strings.Split(childMd, "\n")
+			for i, line := range lines {
+				lines[i] = "> " + line
+			}
+			return fmt.Sprintf("> [!note]+ ## %s\n%s", text, strings.Join(lines, "\n")), nil
 		}
 		return fmt.Sprintf("## %s", text), nil
 
@@ -88,11 +96,15 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 		}
 		text := ConvertRichText(block.Heading3.RichText)
 		if block.Heading3.IsToggleable {
-			children, err := maybeConvertChildren(block, ctx)
+			childMd, err := maybeConvertChildren(block, ctx)
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("> [!note]+ ### %s%s", text, children), nil
+			lines := strings.Split(childMd, "\n")
+			for i, line := range lines {
+				lines[i] = "> " + line
+			}
+			return fmt.Sprintf("> [!note]+ ### %s\n%s", text, strings.Join(lines, "\n")), nil
 		}
 		return fmt.Sprintf("### %s", text), nil
 

@@ -1,6 +1,7 @@
 package frontmatter
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -61,11 +62,7 @@ Body`,
 				return
 			}
 			for k, v := range tt.expected {
-				if result[k] != v {
-					// Handle arrays separately
-					if _, ok := v.([]interface{}); ok {
-						continue // Skip array comparison for simplicity
-					}
+				if !reflect.DeepEqual(result[k], v) {
 					t.Errorf("key %q: got %v, want %v", k, result[k], v)
 				}
 			}

@@ -186,6 +186,53 @@ func (c *Client) QueryDataSource(dataSourceID string, startCursor *string) (*Pag
 	return &result, nil
 }
 
+// QueryDatabase queries entries from a database using the classic endpoint.
+func (c *Client) QueryDatabase(databaseID string, startCursor *string) (*PageListResponse, error) {
+	body := map[string]interface{}{
+		"page_size": 100,
+	}
+	if startCursor != nil {
+		body["start_cursor"] = *startCursor
+	}
+
+	respBody, err := c.request("POST", "/databases/"+databaseID+"/query", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result PageListResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal query response: %w", err)
+	}
+	return &result, nil
+}
+
+// QueryAllEntriesFromDatabase queries all entries using the classic /databases/{id}/query endpoint.
+func (c *Client) QueryAllEntriesFromDatabase(databaseID string) ([]Page, error) {
+	var entries []Page
+	var cursor *string
+
+	for {
+		resp, err := c.QueryDatabase(databaseID, cursor)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, result := range resp.Results {
+			if result.Object == "page" {
+				entries = append(entries, result)
+			}
+		}
+
+		if !resp.HasMore || resp.NextCursor == nil {
+			break
+		}
+		cursor = resp.NextCursor
+	}
+
+	return entries, nil
+}
+
 // GetPage retrieves a page by ID.
 func (c *Client) GetPage(pageID string) (*Page, error) {
 	respBody, err := c.request("GET", "/pages/"+pageID, nil)

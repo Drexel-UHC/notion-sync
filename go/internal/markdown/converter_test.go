@@ -121,6 +121,52 @@ func TestConvertRichText(t *testing.T) {
 			expected: "***Bold and italic***",
 		},
 		{
+			name: "multi-segment bold with italic sub-span",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "bold "},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "and italic"},
+					Annotations: notion.Annotations{Bold: true, Italic: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: " combined"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+			},
+			expected: "**bold *and italic* combined**",
+		},
+		{
+			name: "adjacent bold segments",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "hello "},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "world"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+			},
+			expected: "**hello world**",
+		},
+		{
+			name: "italic span with bold sub-span",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "italic "},
+					Annotations: notion.Annotations{Italic: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "and bold"},
+					Annotations: notion.Annotations{Bold: true, Italic: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: " rest"},
+					Annotations: notion.Annotations{Italic: true, Color: "default"}},
+			},
+			expected: "*italic **and bold** rest*",
+		},
+		{
+			name: "bold then italic separate",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "bold"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: " normal "},
+					Annotations: notion.Annotations{Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "italic"},
+					Annotations: notion.Annotations{Italic: true, Color: "default"}},
+			},
+			expected: "**bold** normal *italic*",
+		},
+		{
 			name: "inline equation",
 			input: []notion.RichText{
 				{
@@ -174,6 +220,44 @@ func TestConvertRichText(t *testing.T) {
 				},
 			},
 			expected: "2024-01-15 → 2024-01-20",
+		},
+		{
+			name: "bold + strikethrough",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "deleted"},
+					Annotations: notion.Annotations{Bold: true, Strikethrough: true, Color: "default"}},
+			},
+			expected: "**~~deleted~~**",
+		},
+		{
+			name: "bold link",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "Click", Link: &notion.Link{URL: "https://example.com"}},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+			},
+			expected: "**[Click](https://example.com)**",
+		},
+		{
+			name: "multi-segment bold with code sub-span",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "text "},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "func"},
+					Annotations: notion.Annotations{Bold: true, Code: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: " more"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+			},
+			expected: "**text `func` more**",
+		},
+		{
+			name: "adjacent bold then italic (no gap)",
+			input: []notion.RichText{
+				{Type: "text", Text: &notion.TextContent{Content: "A"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+				{Type: "text", Text: &notion.TextContent{Content: "B"},
+					Annotations: notion.Annotations{Italic: true, Color: "default"}},
+			},
+			expected: "**A***B*",
 		},
 	}
 
