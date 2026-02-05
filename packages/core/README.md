@@ -1,6 +1,6 @@
 # @notion-sync/core
 
-Platform-agnostic sync engine. Contains all business logic for fetching Notion databases and writing Markdown files. Has zero platform imports -- no `node:fs`, no `vscode`.
+Platform-agnostic sync engine. Contains all business logic for fetching Notion databases and writing Markdown files. Has zero platform imports -- no `node:fs`.
 
 ## What it does
 
@@ -45,11 +45,13 @@ interface RefreshOptions {
   fs: FileSystem;           // Platform filesystem adapter
   fm: FrontmatterReader;    // Frontmatter parser
   folderPath: string;       // Path to synced database folder
+  force?: boolean;          // Skip timestamp comparison, resync all
 }
 
 interface FrozenDatabase {
   databaseId: string;
   title: string;
+  url: string;              // Notion URL
   folderPath: string;
   lastSyncedAt: string;     // ISO timestamp
   entryCount: number;
@@ -71,6 +73,7 @@ Each synced database folder contains a `_database.json` file storing metadata:
 {
   "databaseId": "abc123...",
   "title": "My Database",
+  "url": "https://www.notion.so/abc123...",
   "folderPath": "notion/My Database",
   "lastSyncedAt": "2024-01-15T10:00:00.000Z",
   "entryCount": 42

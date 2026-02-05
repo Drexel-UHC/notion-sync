@@ -1,6 +1,6 @@
 # notion-sync
 
-Monorepo that syncs Notion databases to local Markdown files with YAML frontmatter.
+CLI tool that syncs Notion databases to local Markdown files with YAML frontmatter.
 
 ## Quick Start (for agents)
 
@@ -16,7 +16,6 @@ npm run test         # run tests (83 tests in core)
 packages/
   core/     @notion-sync/core       Platform-agnostic sync engine (all business logic)
   cli/      notion-sync             CLI tool using node:fs
-  vscode/   notion-sync-vscode      VS Code extension using vscode.workspace.fs
 ```
 
 ---
@@ -50,7 +49,6 @@ interface FrontmatterReader {
 ```
 
 - **CLI** implements with `node:fs/promises`
-- **VS Code** implements with `vscode.workspace.fs`
 - **Tests** use in-memory mocks
 
 ### Orchestration Functions
@@ -59,6 +57,7 @@ interface FrontmatterReader {
 |----------|----------|----------|
 | `freshDatabaseImport()` | First-time import | Imports all entries, writes `_database.json` |
 | `refreshDatabase()` | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
+| `refreshDatabase({ force: true })` | Full resync | Ignores timestamps, resyncs all entries |
 | `listSyncedDatabases()` | Discovery | Scans folder for `_database.json` files |
 | `readDatabaseMetadata()` | Single folder | Reads `_database.json` from a folder |
 
@@ -66,7 +65,7 @@ interface FrontmatterReader {
 
 Each synced database folder contains `_database.json`:
 ```json
-{ "databaseId": "...", "title": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
+{ "databaseId": "...", "title": "...", "url": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
 ```
 This allows `refreshDatabase()` to work from just a folder path without external state.
 
@@ -87,14 +86,14 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 | Block → Markdown | `packages/core/src/block-converter.ts` |
 | Rate limiting & retry | `packages/core/src/notion-client.ts` |
 | CLI commands | `packages/cli/src/main.ts` |
-| VS Code commands | `packages/vscode/src/commands.ts` |
 
 ---
 
 ## Key Design Decisions
 
 - **Database-only sync** — no individual page syncing
-- **Metadata file** — `_database.json` in each folder stores databaseId, title, last sync time
+- **Metadata file** — `_database.json` in each folder stores databaseId, title, url, last sync time
+- **Force refresh** — `--force` flag bypasses timestamp checks (useful when database schema changes)
 - **Notion dataSources API** — uses `client.dataSources.query()` (not `databases.query()`)
 - **Forward-slash paths** — core uses `/` internally; adapters resolve to OS paths
 - **Manual YAML serialization** — `yaml` package used only for *parsing*
@@ -121,7 +120,7 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 
 1. Update `ProgressPhase` type in `packages/core/src/types.ts`
 2. Update phase emissions in `packages/core/src/database-freezer.ts`
-3. Update `formatProgress()` in CLI (`packages/cli/src/main.ts`) and VS Code (`packages/vscode/src/commands.ts`)
+3. Update `formatProgress()` in CLI (`packages/cli/src/main.ts`)
 
 ---
 
@@ -133,7 +132,6 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 | `yaml` | ^2.7.0 | core |
 | `@napi-rs/keyring` | ^1.1.0 | cli |
 | `vitest` | ^3.0.0 | core (dev) |
-| `esbuild` | ^0.25.0 | vscode (dev) |
 
 ---
 

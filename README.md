@@ -1,6 +1,6 @@
 # notion-sync
 
-Sync Notion databases to local Markdown files with YAML frontmatter. Works as a CLI tool or a VS Code extension.
+CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.
 
 Given a Notion database URL, notion-sync fetches all entries via the Notion API and writes them to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and all property values. On subsequent runs it compares `last_edited_time` and only re-syncs entries that changed.
 
@@ -10,29 +10,26 @@ Given a Notion database URL, notion-sync fetches all entries via the Notion API 
 packages/
   core/     @notion-sync/core       Platform-agnostic sync engine (all business logic)
   cli/      notion-sync             CLI tool using node:fs
-  vscode/   notion-sync-vscode      VS Code extension using vscode.workspace.fs
 ```
 
-**Core** contains everything: Notion API calls, block-to-Markdown conversion, frontmatter generation, incremental sync, and deletion tracking. It never imports `node:fs` or `vscode` directly.
+**Core** contains everything: Notion API calls, block-to-Markdown conversion, frontmatter generation, incremental sync, and deletion tracking. It never imports `node:fs` directly.
 
-**CLI** and **VS Code** are thin adapters. They implement two interfaces (`FileSystem` and `FrontmatterReader`) defined in core, then pass them in. This keeps platform-specific code to a few dozen lines per adapter.
+**CLI** is a thin adapter that implements two interfaces (`FileSystem` and `FrontmatterReader`) defined in core, then passes them in. This keeps platform-specific code to a few dozen lines.
 
 ```
-                  +-----------+     +-----------+
-                  |    CLI    |     |  VS Code  |
-                  | (node:fs) |     | (vscode)  |
-                  +-----+-----+     +-----+-----+
-                        |                 |
-                        v                 v
+                  +-----------+
+                  |    CLI    |
+                  | (node:fs) |
+                  +-----+-----+
+                        |
+                        v
               FileSystem + FrontmatterReader  (interfaces)
-                        |                 |
-                        +--------+--------+
-                                 |
-                           +-----v-----+
-                           |   Core    |
-                           | (sync     |
-                           |  engine)  |
-                           +-----------+
+                        |
+                  +-----v-----+
+                  |   Core    |
+                  | (sync     |
+                  |  engine)  |
+                  +-----------+
 ```
 
 ## Prerequisites
@@ -75,6 +72,9 @@ node packages/cli/dist/main.js sync <database-url-or-id> --output ./out
 # Refresh an existing sync (incremental update)
 node packages/cli/dist/main.js refresh ./out/MyDatabase
 
+# Force refresh (resync all, ignoring timestamps)
+node packages/cli/dist/main.js refresh ./out/MyDatabase --force
+
 # List synced databases
 node packages/cli/dist/main.js list ./out
 ```
@@ -82,10 +82,9 @@ node packages/cli/dist/main.js list ./out
 ## Commands
 
 ```sh
-npm run build          # Build all 3 packages
+npm run build          # Build both packages
 npm run build:core     # Build only core (tsc)
 npm run build:cli      # Build only CLI (tsc)
-npm run build:vscode   # Build only VS Code extension (esbuild)
 npm run test           # Run core unit tests (vitest, 83 tests)
 ```
 
@@ -93,14 +92,14 @@ npm run test           # Run core unit tests (vitest, 83 tests)
 
 - [packages/core/README.md](packages/core/README.md) -- Sync engine internals, file-by-file guide, key patterns
 - [packages/cli/README.md](packages/cli/README.md) -- CLI install, command reference, configuration
-- [packages/vscode/README.md](packages/vscode/README.md) -- Extension setup, commands, settings, development
 
 ## Key design decisions
 
 - **Incremental sync** -- compares `last_edited_time` from frontmatter and skips unchanged entries
+- **Force refresh** -- `--force` flag bypasses timestamp checks to resync all entries (useful when database schema changes)
 - **Soft deletes** -- entries removed from a Notion database get `notion-deleted: true` in their frontmatter rather than being deleted from disk
 - **Two orchestration functions** -- `freshDatabaseImport()` for first-time imports, `refreshDatabase()` for incremental updates with diff-based optimization
-- **Database metadata file** -- each synced database folder contains `_database.json` with metadata (database ID, title, last sync time, entry count), enabling `refreshDatabase()` to work from just a folder path
+- **Database metadata file** -- each synced database folder contains `_database.json` with metadata (database ID, title, URL, last sync time, entry count), enabling `refreshDatabase()` to work from just a folder path
 - **Forward-slash paths** -- core always uses `/` as the path separator; platform adapters resolve to OS-native paths
 - **Manual YAML serialization** -- frontmatter is written with hand-rolled code for precise formatting; the `yaml` package is used only for parsing
 - **Newer Notion API** -- database entries are queried via `client.dataSources.query()` (not `databases.query()`) to get full property data
@@ -113,7 +112,6 @@ npm run test           # Run core unit tests (vitest, 83 tests)
 | `yaml` | ^2.7.0 | core |
 | `@napi-rs/keyring` | ^1.1.0 | cli |
 | `vitest` | ^3.0.0 | core (dev) |
-| `esbuild` | ^0.25.0 | vscode (dev) |
 
 ## Origin
 

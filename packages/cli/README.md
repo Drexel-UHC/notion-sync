@@ -43,12 +43,13 @@ Creates a subfolder named after the database, then writes one `.md` file per ent
 ### `refresh` -- Incremental update
 
 ```sh
-notion-sync refresh <database-folder> [--api-key <key>]
+notion-sync refresh <database-folder> [--force] [--api-key <key>]
 ```
 
 - `<database-folder>` -- path to a synced database folder (contains `_database.json`)
+- `--force`, `-f` -- resync all entries, ignoring timestamps (useful when database schema changes)
 
-Reads database metadata from `_database.json` and refreshes the database. Only re-syncs entries where `last_edited_time` changed. Marks entries removed from Notion with `notion-deleted: true`.
+Reads database metadata from `_database.json` and refreshes the database. Only re-syncs entries where `last_edited_time` changed (unless `--force` is used). Marks entries removed from Notion with `notion-deleted: true`.
 
 ### `list` -- List synced databases
 
@@ -175,7 +176,20 @@ node packages/cli/dist/main.js refresh "./test-out/Your Database Name"
 #   Deleted: 0
 ```
 
-### Test 4: Deletion tracking
+### Test 4: Force refresh
+
+```sh
+# Add a new property column in Notion (existing entries won't have timestamps updated)
+
+# Force refresh to resync all entries with the new property
+node packages/cli/dist/main.js refresh "./test-out/Your Database Name" --force
+
+# Expected output:
+# Force refreshing database (ignoring timestamps)...
+# All entries will show as Updated (none skipped)
+```
+
+### Test 5: Deletion tracking
 
 ```sh
 # In Notion, delete an entry from your database
