@@ -122,7 +122,7 @@ func TestYamlEscapeString(t *testing.T) {
 		{"null", `"null"`},
 		{"123", `"123"`},
 		{"-starts-with-dash", `"-starts-with-dash"`},
-		{"has\nnewline", `"has\\nnewline"`},
+		{"has\nnewline", `"has\nnewline"`},
 	}
 
 	for _, tt := range tests {

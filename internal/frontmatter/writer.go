@@ -117,7 +117,7 @@ func yamlEscapeString(str string) string {
 		escaped := strings.ReplaceAll(str, "\\", "\\\\")
 		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
 		escaped = strings.ReplaceAll(escaped, "\n", "\\n")
-		return fmt.Sprintf("%q", escaped)
+		return `"` + escaped + `"`
 	}
 
 	return str
