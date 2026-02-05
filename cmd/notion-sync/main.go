@@ -14,7 +14,7 @@ import (
 const usage = `notion-sync — Sync Notion databases to Markdown
 
 Usage:
-  notion-sync import <database-url-or-id> [--output <folder>] [--api-key <key>]
+  notion-sync import <database-id> [--output <folder>] [--api-key <key>]
   notion-sync refresh <database-folder> [--force] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync config set <key> <value>
@@ -27,7 +27,7 @@ Commands:
   config    Manage configuration (apiKey, defaultOutputFolder)
 
 Examples:
-  notion-sync import https://notion.so/mydb... --output ./notion
+  notion-sync import abc123de-f456-7890-abcd-ef1234567890 --output ./my-notes
   notion-sync refresh ./notion/My\ Database
   notion-sync refresh ./notion/My\ Database --force
   notion-sync list ./notion
@@ -90,7 +90,7 @@ func runImport(args []string) error {
 
 	if fs.NArg() == 0 {
 		return fmt.Errorf("missing Notion database URL or ID\n" +
-			"Usage: notion-sync import <database-url-or-id> [--output <folder>] [--api-key <key>]")
+			"Usage: notion-sync import <database-id> [--output <folder>] [--api-key <key>]")
 	}
 
 	cfg, err := config.LoadConfig()

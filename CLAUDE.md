@@ -310,7 +310,7 @@ API key is NOT stored in config file when keyring is available.
 ## CLI Commands
 
 ```sh
-notion-sync import <url-or-id> [--output <folder>] [--api-key <key>]
+notion-sync import <database-id> [--output <folder>] [--api-key <key>]
 notion-sync refresh <folder> [--force/-f] [--api-key <key>]
 notion-sync list [<folder>]
 notion-sync config set <key> <value>

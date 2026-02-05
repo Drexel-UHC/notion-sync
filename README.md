@@ -2,7 +2,7 @@
 
 CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.
 
-Given a Notion database URL, notion-sync fetches all entries via the Notion API and writes them to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and all property values. On subsequent runs it compares `last_edited_time` and only re-syncs entries that changed.
+Given a Notion database ID, notion-sync fetches all entries via the Notion API and writes them to `.md` files on disk. Each file gets YAML frontmatter containing the Notion ID, URL, edit timestamp, and all property values. On subsequent runs it compares `last_edited_time` and only re-syncs entries that changed.
 
 ## Install
 
@@ -30,18 +30,20 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 # Store your API key (saved in OS keychain)
 notion-sync config set apiKey <your-notion-api-key>
 
-# Import a database
-notion-sync import https://notion.so/your-database-url --output ./notion
+# Import a database (use the database ID — see "Finding your database ID" below)
+notion-sync import abc123de-f456-7890-abcd-ef1234567890 --output ./my-notes
 
 # Refresh (incremental update)
-notion-sync refresh ./notion/MyDatabase
+notion-sync refresh ./my-notes/MyDatabase
 
 # Force refresh (resync all entries)
-notion-sync refresh ./notion/MyDatabase --force
+notion-sync refresh ./my-notes/MyDatabase --force
 
 # List synced databases
-notion-sync list ./notion
+notion-sync list ./my-notes
 ```
+
+The `--output` folder can be any directory — notion-sync creates a subfolder inside it named after the database.
 
 ## Prerequisites
 
@@ -56,10 +58,20 @@ notion-sync list ./notion
 5. In Notion, open the database you want to sync
 6. Click the `...` menu > "Connections" > add your integration
 
+### Finding your database ID
+
+Open the database as a **full page** in Notion. The URL will look like:
+
+```
+https://www.notion.so/yourworkspace/abc123def4567890abcdef1234567890?v=...
+```
+
+The database ID is the 32-character hex string after your workspace name — in this example, `abc123def4567890abcdef1234567890`. You can pass it with or without dashes; notion-sync accepts both formats as well as the full URL.
+
 ## Commands
 
 ```sh
-notion-sync import <database-url> [--output <folder>] [--api-key <key>]
+notion-sync import <database-id> [--output <folder>] [--api-key <key>]
 notion-sync refresh <folder> [--force] [--api-key <key>]
 notion-sync list [<folder>]
 notion-sync config set <key> <value>
