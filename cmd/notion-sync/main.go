@@ -11,6 +11,25 @@ import (
 	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
+// reorderArgs moves flag arguments (starting with "-") before positional arguments
+// so that Go's flag package can parse them regardless of order.
+func reorderArgs(args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			// If next arg exists and doesn't start with "-", it's the flag's value
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i++
+			}
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+	return append(flags, positional...)
+}
+
 const usage = `notion-sync — Sync Notion databases to Markdown
 
 Usage:
@@ -81,10 +100,11 @@ func main() {
 func runImport(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	output := fs.String("output", "", "Output folder")
+	outputAlt := fs.String("out", "", "Output folder (alias)")
 	output2 := fs.String("o", "", "Output folder (shorthand)")
 	apiKey := fs.String("api-key", "", "Notion API key")
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
 	}
 
@@ -109,6 +129,9 @@ func runImport(args []string) error {
 	}
 
 	outputFolder := *output
+	if outputFolder == "" {
+		outputFolder = *outputAlt
+	}
 	if outputFolder == "" {
 		outputFolder = *output2
 	}
@@ -167,7 +190,7 @@ func runRefresh(args []string) error {
 	force := fs.Bool("force", false, "Resync all entries, ignoring timestamps")
 	forceShort := fs.Bool("f", false, "Resync all entries (shorthand)")
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
 	}
 
