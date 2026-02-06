@@ -1,32 +1,32 @@
 {
-    "version": "0.1.1",
-    "description": "CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.",
-    "homepage": "https://github.com/ran-codes/notion-sync",
-    "license": "MIT",
-    "architecture": {
-        "64bit": {
-            "url": "https://github.com/ran-codes/notion-sync/releases/download/v0.1.1/notion-sync-windows-amd64.exe",
-            "hash": "84f3bc756b7340769ab1258bd62a7b477a14b622f0b1d55cd872395ad2bfaf77"
-        }
-    },
-    "bin": [
-        [
-            "notion-sync-windows-amd64.exe",
-            "notion-sync"
-        ]
-    ],
-    "checkver": {
-        "github": "https://github.com/ran-codes/notion-sync"
-    },
-    "autoupdate": {
-        "architecture": {
-            "64bit": {
-                "url": "https://github.com/ran-codes/notion-sync/releases/download/v$version/notion-sync-windows-amd64.exe"
-            }
-        },
-        "hash": {
-            "url": "https://github.com/ran-codes/notion-sync/releases/download/v$version/checksums.txt",
-            "regex": "([a-fA-F0-9]{64})\\s+notion-sync-windows-amd64\\.exe"
-        }
+  "version": "0.1.2",
+  "description": "CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.",
+  "homepage": "https://github.com/ran-codes/notion-sync",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/ran-codes/notion-sync/releases/download/v0.1.2/notion-sync-windows-amd64.exe",
+      "hash": "e36c872a01c07fa034e3603422509121effdb454373e50b304e774bdfa85b320"
     }
+  },
+  "bin": [
+    [
+      "notion-sync-windows-amd64.exe",
+      "notion-sync"
+    ]
+  ],
+  "checkver": {
+    "github": "https://github.com/ran-codes/notion-sync"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/ran-codes/notion-sync/releases/download/v$version/notion-sync-windows-amd64.exe"
+      }
+    },
+    "hash": {
+      "url": "https://github.com/ran-codes/notion-sync/releases/download/v$version/checksums.txt",
+      "regex": "([a-fA-F0-9]{64})\\s+notion-sync-windows-amd64\\.exe"
+    }
+  }
 }
