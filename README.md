@@ -15,6 +15,8 @@ curl -fsSL https://raw.githubusercontent.com/ran-codes/notion-sync/main/scripts/
 ### Scoop (Windows)
 
 ```powershell
+## Install Scoop if you don't have it: https://scoop.sh
+# irm get.scoop.sh | iex
 scoop bucket add notion-sync https://github.com/ran-codes/notion-sync
 scoop install notion-sync
 ```
@@ -30,7 +32,7 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 notion-sync config set apiKey <your-notion-api-key>
 
 # Import a database (use the database ID — see "Finding your database ID" below)
-notion-sync import abc123de-f456-7890-abcd-ef1234567890 --output ./my-notes
+notion-sync import abc123de-f456-7890-abcd-ef1234567890 --out ./my-notes
 
 # Refresh (incremental update)
 notion-sync refresh ./my-notes/MyDatabase
@@ -42,7 +44,7 @@ notion-sync refresh ./my-notes/MyDatabase --force
 notion-sync list ./my-notes
 ```
 
-The `--output` folder can be any directory — notion-sync creates a subfolder inside it named after the database.
+The `--out` folder can be any directory — notion-sync creates a subfolder inside it named after the database.
 
 ## Prerequisites
 
@@ -70,19 +72,19 @@ The database ID is the 32-character hex string after your workspace name — in 
 ## Commands
 
 ```sh
-notion-sync import <database-id> [--output <folder>] [--api-key <key>]
+notion-sync import <database-id> [--out <folder>] [--api-key <key>]
 notion-sync refresh <folder> [--force] [--api-key <key>]
 notion-sync list [<folder>]
 notion-sync config set <key> <value>
 ```
 
-| Command | Description |
-|---------|-------------|
-| `import` | First-time import of a Notion database |
-| `refresh` | Incremental update (only changed entries) |
-| `refresh --force` | Full resync ignoring timestamps |
-| `list` | Show all synced databases in a folder |
-| `config set apiKey <key>` | Store API key in OS keychain |
+| Command                   | Description                               |
+| ------------------------- | ----------------------------------------- |
+| `import`                  | First-time import of a Notion database    |
+| `refresh`                 | Incremental update (only changed entries) |
+| `refresh --force`         | Full resync ignoring timestamps           |
+| `list`                    | Show all synced databases in a folder     |
+| `config set apiKey <key>` | Store API key in OS keychain              |
 
 ## Architecture
 
@@ -119,10 +121,10 @@ See [CLAUDE.md](CLAUDE.md) for implementation details, how to add block/property
 
 ## Dependencies
 
-| Package | Used for |
-|---------|----------|
+| Package                         | Used for           |
+| ------------------------------- | ------------------ |
 | `github.com/zalando/go-keyring` | OS keychain access |
-| `gopkg.in/yaml.v3` | YAML parsing |
+| `gopkg.in/yaml.v3`              | YAML parsing       |
 
 No third-party Notion client — uses a thin REST wrapper for full control over rate limiting.
 
