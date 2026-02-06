@@ -11,6 +11,9 @@ import (
 	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
+// version is set at build time via -ldflags.
+var version = "dev"
+
 // boolFlags lists flags that don't take a value argument.
 var boolFlags = map[string]bool{
 	"--force": true, "-f": true,
@@ -47,7 +50,7 @@ func reorderArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
-const usage = `notion-sync — Sync Notion databases to Markdown
+var usage = `notion-sync — Sync Notion databases to Markdown (v` + version + `)
 
 Usage:
   notion-sync import <database-id> [--output <folder>] [--api-key <key>]
@@ -80,9 +83,13 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Handle help flags
+	// Handle help and version flags
 	if os.Args[1] == "--help" || os.Args[1] == "-h" {
 		fmt.Print(usage)
+		os.Exit(0)
+	}
+	if os.Args[1] == "--version" || os.Args[1] == "-v" {
+		fmt.Printf("notion-sync %s\n", version)
 		os.Exit(0)
 	}
 
