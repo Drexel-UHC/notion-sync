@@ -25,7 +25,8 @@ type DatabaseImportOptions struct {
 type RefreshOptions struct {
 	Client     *notion.Client
 	FolderPath string
-	Force      bool // Skip timestamp comparison and resync all entries
+	Force      bool     // Skip timestamp comparison and resync all entries
+	PageIDs    []string // If set, only refresh these specific page IDs
 }
 
 // FreshDatabaseImport imports all entries from a Notion database.
@@ -143,6 +144,63 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 
 	databaseID := metadata.DatabaseID
 
+	// --ids mode: fetch only specific pages, skip full query/diff/delete
+	if len(opts.PageIDs) > 0 {
+		total := len(opts.PageIDs)
+		dbTitle := metadata.Title
+
+		result := &DatabaseFreezeResult{
+			Title:      dbTitle,
+			FolderPath: opts.FolderPath,
+			Total:      total,
+		}
+
+		if onProgress != nil {
+			onProgress(ProgressPhase{Phase: PhaseStaleDetected, Stale: total, Total: total})
+		}
+
+		for i, pageID := range opts.PageIDs {
+			if onProgress != nil {
+				onProgress(ProgressPhase{Phase: PhaseImporting, Current: i + 1, Total: total, Title: dbTitle})
+			}
+
+			pageResult, err := FreezePage(FreezePageOptions{
+				Client:       opts.Client,
+				NotionID:     pageID,
+				OutputFolder: opts.FolderPath,
+				DatabaseID:   databaseID,
+				Force:        true,
+			})
+
+			if err != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, fmt.Sprintf("Entry %s: %v", pageID, err))
+				continue
+			}
+
+			switch pageResult.Status {
+			case "created":
+				result.Created++
+			case "updated":
+				result.Updated++
+			case "skipped":
+				result.Skipped++
+			}
+		}
+
+		// Update metadata timestamp but preserve entry count
+		metadata.LastSyncedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := WriteDatabaseMetadata(opts.FolderPath, metadata); err != nil {
+			return nil, fmt.Errorf("write metadata: %w", err)
+		}
+
+		if onProgress != nil {
+			onProgress(ProgressPhase{Phase: PhaseComplete})
+		}
+
+		return result, nil
+	}
+
 	if onProgress != nil {
 		onProgress(ProgressPhase{Phase: PhaseQuerying})
 	}
@@ -231,6 +289,7 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 			OutputFolder: opts.FolderPath,
 			DatabaseID:   databaseID,
 			Page:         &entry,
+			Force:        opts.Force,
 		})
 
 		if err != nil {
