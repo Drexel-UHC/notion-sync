@@ -2,6 +2,16 @@
 
 CLI tool that syncs Notion databases to local Markdown files with YAML frontmatter.
 
+## Rules
+
+- Be Concise - i like quick responses to iterate quickly. Save long responses for when asked about details or planning.
+- Always use github cli for github oeprations; if not isntalled this a critical pblocked and tell em to install it.
+- Claude skills are found in .claude/skills
+- Tool use
+  - **Minimize tool calls.** Use Grep, Read, Glob directly — they're fast and parallel. Never spawn a Task agent (subagent) for simple file reads or searches.
+  - **No heavyweight agents for simple operations.** If a skill just needs to read/grep a handful of files, do it inline. If you think a Task agent is needed, ask me first.
+- Refer to context7 first if have any questions about claude code, notion mcp or github cli
+
 ## Quick Start (for agents)
 
 ```sh
@@ -57,16 +67,17 @@ FreshDatabaseImport() or RefreshDatabase()
 
 ### Key Functions
 
-| Function | Use Case | Behavior |
-|----------|----------|----------|
-| `FreshDatabaseImport()` | First-time import | Imports all entries, writes `_database.json` |
-| `RefreshDatabase()` | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
-| `RefreshDatabase(force=true)` | Full resync | Ignores timestamps, resyncs all entries |
-| `ListSyncedDatabases()` | Discovery | Scans folder for `_database.json` files |
+| Function                      | Use Case           | Behavior                                                     |
+| ----------------------------- | ------------------ | ------------------------------------------------------------ |
+| `FreshDatabaseImport()`       | First-time import  | Imports all entries, writes `_database.json`                 |
+| `RefreshDatabase()`           | Incremental update | Reads `_database.json`, compares timestamps, skips unchanged |
+| `RefreshDatabase(force=true)` | Full resync        | Ignores timestamps, resyncs all entries                      |
+| `ListSyncedDatabases()`       | Discovery          | Scans folder for `_database.json` files                      |
 
 ### Metadata File
 
 Each synced database folder contains `_database.json`:
+
 ```json
 { "databaseId": "...", "title": "...", "url": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
 ```
@@ -79,17 +90,17 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 
 ## Key Code Locations
 
-| To understand... | Look at... |
-|------------------|------------|
-| CLI entry point | `cmd/notion-sync/main.go` |
-| Notion API client | `internal/notion/client.go` |
-| API response types | `internal/notion/types.go` |
-| Database sync logic | `internal/sync/database.go` |
-| Page/entry processing | `internal/sync/page.go` |
-| Block → Markdown | `internal/markdown/converter.go` |
-| Rich text handling | `internal/markdown/richtext.go` |
-| YAML frontmatter | `internal/frontmatter/` |
-| Config & keyring | `internal/config/` |
+| To understand...      | Look at...                       |
+| --------------------- | -------------------------------- |
+| CLI entry point       | `cmd/notion-sync/main.go`        |
+| Notion API client     | `internal/notion/client.go`      |
+| API response types    | `internal/notion/types.go`       |
+| Database sync logic   | `internal/sync/database.go`      |
+| Page/entry processing | `internal/sync/page.go`          |
+| Block → Markdown      | `internal/markdown/converter.go` |
+| Rich text handling    | `internal/markdown/richtext.go`  |
+| YAML frontmatter      | `internal/frontmatter/`          |
+| Config & keyring      | `internal/config/`               |
 
 ---
 
@@ -99,7 +110,7 @@ Progress callback reports: `querying` → `diffing` → `stale-detected` → `im
 - **Metadata file** — `_database.json` in each folder stores databaseId, title, url, last sync time
 - **Force refresh** — `--force` flag bypasses timestamp checks (useful when database schema changes)
 - **Notion dataSources API** — uses `/data_sources/{id}/query` (not `/databases/{id}/query`)
-- **Manual YAML serialization** — `yaml` package used only for *parsing*; writing is manual for precise formatting
+- **Manual YAML serialization** — `yaml` package used only for _parsing_; writing is manual for precise formatting
 - **Soft deletes** — removed entries get `notion-deleted: true` in frontmatter
 - **Incremental sync** — compares `notion-last-edited` timestamps
 - **No third-party Notion client** — thin REST wrapper for full control over rate limiting
@@ -127,13 +138,13 @@ Mutex-protected `lastRequestTime` ensures minimum interval between requests.
 
 ### Key Client Functions
 
-| Function | Purpose |
-|----------|---------|
-| `NewClient(apiKey)` | Create client |
-| `GetDatabase(id)` | Fetch database metadata |
-| `QueryAllEntries(dataSourceID)` | Paginated query for all entries |
-| `FetchAllBlocks(pageID)` | Paginated fetch of all blocks |
-| `NormalizeNotionID(input)` | Convert URL/hex/UUID to standard UUID format |
+| Function                        | Purpose                                      |
+| ------------------------------- | -------------------------------------------- |
+| `NewClient(apiKey)`             | Create client                                |
+| `GetDatabase(id)`               | Fetch database metadata                      |
+| `QueryAllEntries(dataSourceID)` | Paginated query for all entries              |
+| `FetchAllBlocks(pageID)`        | Paginated fetch of all blocks                |
+| `NormalizeNotionID(input)`      | Convert URL/hex/UUID to standard UUID format |
 
 ### API Endpoints Used
 
@@ -184,51 +195,51 @@ GET  /blocks/{id}/children
 
 ### Supported Block Types
 
-| Type | Output |
-|------|--------|
-| `paragraph` | Text |
-| `heading_1/2/3` | `#/##/###` (toggleable → callout) |
-| `bulleted_list_item` | `- item` |
-| `numbered_list_item` | `1. item` (auto-numbered) |
-| `to_do` | `- [ ]` or `- [x]` |
-| `code` | Fenced code block |
-| `quote` | `> quote` |
-| `callout` | `> [!type]` (emoji → type mapping) |
-| `equation` | `$$...$$` |
-| `divider` | `---` |
-| `toggle` | `> [!note]+ ...` |
-| `child_page` | `[[title]]` |
-| `child_database` | HTML comment |
-| `image` | `![alt](url)` |
-| `video/audio/file/pdf` | `[caption](url)` or URL |
-| `bookmark/embed` | `[caption](url)` or URL |
-| `link_to_page` | `[[notion-id: ...]]` |
-| `synced_block` | Fetches and converts children |
-| `table` | Markdown table |
-| `column_list` | Columns separated by `---` |
+| Type                   | Output                             |
+| ---------------------- | ---------------------------------- |
+| `paragraph`            | Text                               |
+| `heading_1/2/3`        | `#/##/###` (toggleable → callout)  |
+| `bulleted_list_item`   | `- item`                           |
+| `numbered_list_item`   | `1. item` (auto-numbered)          |
+| `to_do`                | `- [ ]` or `- [x]`                 |
+| `code`                 | Fenced code block                  |
+| `quote`                | `> quote`                          |
+| `callout`              | `> [!type]` (emoji → type mapping) |
+| `equation`             | `$$...$$`                          |
+| `divider`              | `---`                              |
+| `toggle`               | `> [!note]+ ...`                   |
+| `child_page`           | `[[title]]`                        |
+| `child_database`       | HTML comment                       |
+| `image`                | `![alt](url)`                      |
+| `video/audio/file/pdf` | `[caption](url)` or URL            |
+| `bookmark/embed`       | `[caption](url)` or URL            |
+| `link_to_page`         | `[[notion-id: ...]]`               |
+| `synced_block`         | Fetches and converts children      |
+| `table`                | Markdown table                     |
+| `column_list`          | Columns separated by `---`         |
 
 ### Rich Text Annotations
 
-| Annotation | Markdown |
-|------------|----------|
-| Bold | `**text**` |
-| Italic | `*text*` |
-| Code | `` `text` `` |
-| Strikethrough | `~~text~~` |
-| Underline | `<u>text</u>` |
-| Background color | `==text==` |
-| Link | `[text](url)` |
-| Equation | `$expression$` |
+| Annotation       | Markdown       |
+| ---------------- | -------------- |
+| Bold             | `**text**`     |
+| Italic           | `*text*`       |
+| Code             | `` `text` ``   |
+| Strikethrough    | `~~text~~`     |
+| Underline        | `<u>text</u>`  |
+| Background color | `==text==`     |
+| Link             | `[text](url)`  |
+| Equation         | `$expression$` |
 
 ### Mention Types
 
-| Type | Output |
-|------|--------|
-| Page | `[[notion-id: id]]` |
-| Database | `[[notion-id: id]]` |
-| Date | `start` or `start → end` |
-| User | `@name` |
-| Link preview | `[text](url)` |
+| Type         | Output                   |
+| ------------ | ------------------------ |
+| Page         | `[[notion-id: id]]`      |
+| Database     | `[[notion-id: id]]`      |
+| Date         | `start` or `start → end` |
+| User         | `@name`                  |
+| Link preview | `[text](url)`            |
 
 ---
 
@@ -252,21 +263,21 @@ Uses `gopkg.in/yaml.v3` to parse existing frontmatter from `.md` files.
 
 ## Property Mapping (`internal/sync/page.go`)
 
-| Notion Type | Frontmatter Value |
-|-------------|-------------------|
-| `title` | (used as filename, not in frontmatter) |
-| `rich_text` | Converted to plain Markdown |
-| `number` | Number or `null` |
-| `select` | Option name or `null` |
-| `multi_select` | Array of option names |
-| `status` | Status name or `null` |
-| `date` | `start` or `start → end` |
-| `checkbox` | `true` or `false` |
-| `url/email/phone_number` | String or `null` |
-| `relation` | Array of page IDs |
-| `people` | Array of names (or IDs) |
-| `files` | Array of URLs |
-| `created_time/last_edited_time` | ISO timestamp |
+| Notion Type                     | Frontmatter Value                      |
+| ------------------------------- | -------------------------------------- |
+| `title`                         | (used as filename, not in frontmatter) |
+| `rich_text`                     | Converted to plain Markdown            |
+| `number`                        | Number or `null`                       |
+| `select`                        | Option name or `null`                  |
+| `multi_select`                  | Array of option names                  |
+| `status`                        | Status name or `null`                  |
+| `date`                          | `start` or `start → end`               |
+| `checkbox`                      | `true` or `false`                      |
+| `url/email/phone_number`        | String or `null`                       |
+| `relation`                      | Array of page IDs                      |
+| `people`                        | Array of names (or IDs)                |
+| `files`                         | Array of URLs                          |
+| `created_time/last_edited_time` | ISO timestamp                          |
 
 Skipped: `formula`, `rollup`, `button`, `unique_id`, `verification`
 
@@ -289,6 +300,7 @@ const keyringAccount = "api-key"
 ```
 
 Uses `github.com/zalando/go-keyring`:
+
 - Windows: Credential Manager
 - macOS: Keychain
 - Linux: Secret Service (GNOME Keyring, KWallet)
@@ -351,10 +363,10 @@ Exit codes: `0` success, `1` error
 
 ## Dependencies
 
-| Package | Used for |
-|---------|----------|
+| Package                         | Used for           |
+| ------------------------------- | ------------------ |
 | `github.com/zalando/go-keyring` | OS keychain access |
-| `gopkg.in/yaml.v3` | YAML parsing only |
+| `gopkg.in/yaml.v3`              | YAML parsing only  |
 
 ---
 
@@ -371,8 +383,8 @@ Tests don't require Notion API access — they test pure conversion logic.
 
 ### Test Databases
 
-| Name | Database ID | Reference |
-|------|-------------|-----------|
+| Name                                | Database ID                            | Reference                                        |
+| ----------------------------------- | -------------------------------------- | ------------------------------------------------ |
 | Complex (Property & Block Coverage) | `2fe57008-e885-8003-b1f3-cc05981dc6b0` | `.claude/reference/v0.1/test-databases/complex/` |
 
 ---
@@ -380,6 +392,7 @@ Tests don't require Notion API access — they test pure conversion logic.
 ## Release
 
 Push a git tag (`v1.0.0`) to trigger GitHub Actions release workflow. Builds binaries for:
+
 - Windows amd64
 - macOS amd64, arm64
 - Linux amd64, arm64
