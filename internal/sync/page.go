@@ -19,6 +19,7 @@ type FreezePageOptions struct {
 	OutputFolder string
 	DatabaseID   string
 	Page         *notion.Page // Pre-fetched page (optional)
+	Force        bool         // Skip timestamp check and always re-freeze
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -42,7 +43,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	// Check for re-freeze: compare last_edited_time
 	exists := fileExists(filePath)
-	if exists {
+	if !opts.Force && exists {
 		content, err := os.ReadFile(filePath)
 		if err == nil {
 			fm, _ := frontmatter.Parse(string(content))

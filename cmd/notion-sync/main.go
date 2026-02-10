@@ -54,14 +54,15 @@ var usage = `notion-sync — Sync Notion databases to Markdown (v` + version + `
 
 Usage:
   notion-sync import <database-id> [--output <folder>] [--api-key <key>]
-  notion-sync refresh <database-folder> [--force] [--api-key <key>]
+  notion-sync refresh <database-folder> [--ids id1,id2] [--force] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync config set <key> <value>
 
 Commands:
   import    Import a Notion database to local Markdown files
   refresh   Refresh an existing synced database (incremental update)
-            --force, -f  Resync all entries, ignoring timestamps
+            --ids id1,id2  Refresh only specific pages by ID
+            --force, -f    Resync all entries, ignoring timestamps
   list      List all synced databases in a folder
   config    Manage configuration (apiKey, defaultOutputFolder)
 
@@ -213,6 +214,7 @@ func runRefresh(args []string) error {
 	apiKey := fs.String("api-key", "", "Notion API key")
 	force := fs.Bool("force", false, "Resync all entries, ignoring timestamps")
 	forceShort := fs.Bool("f", false, "Resync all entries (shorthand)")
+	ids := fs.String("ids", "", "Comma-separated Notion page IDs to refresh")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -220,7 +222,7 @@ func runRefresh(args []string) error {
 
 	if fs.NArg() == 0 {
 		return fmt.Errorf("missing database folder path\n" +
-			"Usage: notion-sync refresh <database-folder> [--force] [--api-key <key>]\n" +
+			"Usage: notion-sync refresh <database-folder> [--ids id1,id2] [--force] [--api-key <key>]\n" +
 			"Example: notion-sync refresh ./notion/My\\ Database")
 	}
 
@@ -240,9 +242,27 @@ func runRefresh(args []string) error {
 	folderPath := fs.Arg(0)
 	forceRefresh := *force || *forceShort
 
+	// Parse --ids flag
+	var pageIDs []string
+	if *ids != "" {
+		for _, raw := range strings.Split(*ids, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			normalized, err := notion.NormalizeNotionID(raw)
+			if err != nil {
+				return fmt.Errorf("invalid ID %q: %w", raw, err)
+			}
+			pageIDs = append(pageIDs, normalized)
+		}
+	}
+
 	client := notion.NewClient(key)
 
-	if forceRefresh {
+	if len(pageIDs) > 0 {
+		fmt.Printf("Refreshing %d specific page(s)...\n", len(pageIDs))
+	} else if forceRefresh {
 		fmt.Println("Force refreshing database (ignoring timestamps)...")
 	} else {
 		fmt.Println("Refreshing database...")
@@ -253,6 +273,7 @@ func runRefresh(args []string) error {
 		Client:     client,
 		FolderPath: folderPath,
 		Force:      forceRefresh,
+		PageIDs:    pageIDs,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhaseImporting {
 			dbTitle = p.Title
