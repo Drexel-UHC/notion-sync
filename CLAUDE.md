@@ -369,6 +369,12 @@ go test -run TestConvertBlocksToMarkdown ./internal/markdown/  # specific test
 
 Tests don't require Notion API access — they test pure conversion logic.
 
+### Test Databases
+
+| Name | Database ID | Reference |
+|------|-------------|-----------|
+| Complex (Property & Block Coverage) | `2fe57008-e885-8003-b1f3-cc05981dc6b0` | `.claude/reference/v0.1/test-databases/complex/` |
+
 ---
 
 ## Release
