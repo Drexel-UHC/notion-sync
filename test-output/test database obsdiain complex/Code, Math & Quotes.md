@@ -1,24 +1,24 @@
 ---
 notion-id: 2fe57008-e885-819e-a0f9-c28e89f783fc
 notion-url: "https://www.notion.so/Code-Math-Quotes-2fe57008e885819ea0f9c28e89f783fc"
-notion-frozen-at: "2026-02-10T15:44:57Z"
+notion-frozen-at: "2026-02-10T17:03:13Z"
 notion-last-edited: "2026-02-05T19:44:00.000Z"
 notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0
+Approved: true
+Assignee: []
 Attachments: []
-Related: []
+Category: Design
+"Contact Email": carol@example.com
 Created: "2026-02-05T19:44:00.000Z"
+Description: Tests code blocks, equations, quotes, and callouts
+"Due Date": 2026-01-10
 "Last Edited": "2026-02-05T19:44:00.000Z"
+Phone: +81-3-1234-5678
+Related: []
+Score: 78.5
 Tags:
   - docs
-Approved: true
-Score: 78.5
-"Due Date": 2026-01-10
-Category: Design
-Phone: +81-3-1234-5678
-"Contact Email": carol@example.com
-Assignee: []
 Website: "https://example.com/design"
-Description: Tests code blocks, equations, quotes, and callouts
 ---
 ## Code Blocks
 ```python
