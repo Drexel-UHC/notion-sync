@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -134,7 +135,7 @@ func (c *Client) request(method, endpoint string, body interface{}) ([]byte, err
 			delay = maxBackoffMs * time.Millisecond
 		}
 
-		fmt.Printf("Notion API %d. Retrying in %dms (attempt %d/%d)\n",
+		fmt.Fprintf(os.Stderr, "Notion API %d. Retrying in %dms (attempt %d/%d)\n",
 			resp.StatusCode, delay.Milliseconds(), attempt+1, maxRetries)
 
 		time.Sleep(delay)

@@ -3,6 +3,7 @@ package frontmatter
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -38,12 +39,17 @@ func BuildOrdered(frontmatter map[string]interface{}, keys []string, body string
 		}
 	}
 
-	// Write remaining keys
-	for key, value := range frontmatter {
+	// Write remaining keys in sorted order
+	var remaining []string
+	for key := range frontmatter {
 		if !written[key] {
-			sb.WriteString(formatYamlEntry(key, value))
-			sb.WriteString("\n")
+			remaining = append(remaining, key)
 		}
+	}
+	sort.Strings(remaining)
+	for _, key := range remaining {
+		sb.WriteString(formatYamlEntry(key, frontmatter[key]))
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString("---\n")

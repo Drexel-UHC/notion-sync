@@ -106,7 +106,7 @@ func SaveConfig(key, value string) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, append(newData, '\n'), 0644)
+	return os.WriteFile(configPath, append(newData, '\n'), 0600)
 }
 
 func removeAPIKeyFromConfigFile() error {
@@ -133,7 +133,7 @@ func removeAPIKeyFromConfigFile() error {
 		return err
 	}
 
-	return os.WriteFile(configPath, append(newData, '\n'), 0644)
+	return os.WriteFile(configPath, append(newData, '\n'), 0600)
 }
 
 // MigrateAPIKeyToKeychain migrates API key from config file to keyring.
@@ -165,7 +165,7 @@ func MigrateAPIKeyToKeychain() {
 		delete(fileConfig, "apiKey")
 		newData, err := json.MarshalIndent(fileConfig, "", "  ")
 		if err == nil {
-			os.WriteFile(configPath, append(newData, '\n'), 0644)
+			os.WriteFile(configPath, append(newData, '\n'), 0600)
 		}
 		fmt.Println("Migrated API key from config file to OS keychain.")
 	}

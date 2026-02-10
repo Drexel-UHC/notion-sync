@@ -408,7 +408,7 @@ func markAsDeleted(filePath string) error {
 		return err
 	}
 
-	contentStr := string(content)
+	contentStr := strings.ReplaceAll(string(content), "\r\n", "\n")
 
 	// Check if already marked
 	if strings.Contains(contentStr, "notion-deleted: true") {
