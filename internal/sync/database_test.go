@@ -140,6 +140,56 @@ func TestMarkAsDeleted_NoFrontmatter(t *testing.T) {
 	}
 }
 
+func TestTimestampsEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical strings", "2025-01-15T10:30:00Z", "2025-01-15T10:30:00Z", true},
+		{".000Z vs Z", "2025-01-15T10:30:00.000Z", "2025-01-15T10:30:00Z", true},
+		{"different times", "2025-01-15T10:30:00Z", "2025-01-15T11:00:00Z", false},
+		{"both empty", "", "", true},
+		{"one empty", "2025-01-15T10:30:00Z", "", false},
+		{"unparseable a", "not-a-time", "2025-01-15T10:30:00Z", false},
+		{"unparseable b", "2025-01-15T10:30:00Z", "not-a-time", false},
+		{"both unparseable", "nope", "nada", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := timestampsEqual(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("timestampsEqual(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanLocalFiles_MillisecondTimestamp(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a file with .000Z timestamp (what yaml.v3 might produce after normalization)
+	content := "---\nnotion-id: ms-page\nnotion-last-edited: 2025-06-01T12:00:00.000Z\n---\nBody\n"
+	os.WriteFile(filepath.Join(dir, "page.md"), []byte(content), 0644)
+
+	files, err := scanLocalFiles(dir)
+	if err != nil {
+		t.Fatalf("scanLocalFiles: %v", err)
+	}
+
+	info, ok := files["ms-page"]
+	if !ok {
+		t.Fatal("missing entry for ms-page")
+	}
+
+	// After normalization, .000Z should become Z
+	want := "2025-06-01T12:00:00Z"
+	if info.lastEdited != want {
+		t.Errorf("lastEdited = %q, want %q", info.lastEdited, want)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

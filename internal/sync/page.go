@@ -48,7 +48,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 			fm, _ := frontmatter.Parse(string(content))
 			if fm != nil {
 				if storedEdited, ok := fm["notion-last-edited"].(string); ok {
-					if storedEdited == page.LastEditedTime {
+					if timestampsEqual(storedEdited, page.LastEditedTime) {
 						return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
 					}
 				}

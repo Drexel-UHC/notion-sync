@@ -3,6 +3,7 @@ package frontmatter
 
 import (
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,7 +27,27 @@ func Parse(content string) (map[string]interface{}, error) {
 		return nil, err
 	}
 
+	normalizeMapValues(result)
+
 	return result, nil
+}
+
+// normalizeMapValues converts any time.Time values back to RFC3339 strings.
+// yaml.v3 automatically parses ISO 8601 strings into time.Time, which breaks
+// downstream .(string) type assertions.
+func normalizeMapValues(m map[string]interface{}) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case time.Time:
+			m[k] = val.Format(time.RFC3339)
+		case []interface{}:
+			for i, item := range val {
+				if t, ok := item.(time.Time); ok {
+					val[i] = t.Format(time.RFC3339)
+				}
+			}
+		}
+	}
 }
 
 // GetBody extracts the body content after frontmatter.

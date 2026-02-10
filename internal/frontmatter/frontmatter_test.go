@@ -47,6 +47,28 @@ Body`,
 				"tags": []interface{}{"one", "two"},
 			},
 		},
+		{
+			name: "quoted ISO 8601 timestamp with milliseconds returns string",
+			content: `---
+notion-last-edited: "2025-01-15T10:30:00.000Z"
+---
+Body`,
+			expected: map[string]interface{}{
+				// Quoted strings stay as-is in yaml.v3 (already a string, not time.Time).
+				// timestampsEqual() handles .000Z vs Z comparison.
+				"notion-last-edited": "2025-01-15T10:30:00.000Z",
+			},
+		},
+		{
+			name: "unquoted ISO 8601 timestamp returns string",
+			content: `---
+notion-last-edited: 2025-01-15T10:30:00Z
+---
+Body`,
+			expected: map[string]interface{}{
+				"notion-last-edited": "2025-01-15T10:30:00Z",
+			},
+		},
 	}
 
 	for _, tt := range tests {
