@@ -206,7 +206,7 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 
 		if local, ok := localFiles[entry.ID]; ok {
-			if local.lastEdited == entry.LastEditedTime {
+			if timestampsEqual(local.lastEdited, entry.LastEditedTime) {
 				result.Skipped++
 				continue
 			}
@@ -327,6 +327,20 @@ func scanLocalFiles(folderPath string) (map[string]localFileInfo, error) {
 	}
 
 	return result, nil
+}
+
+// timestampsEqual compares two RFC3339 timestamp strings, tolerating
+// differences like ".000Z" vs "Z" that represent the same instant.
+func timestampsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return ta.Equal(tb)
 }
 
 func markAsDeleted(filePath string) error {
