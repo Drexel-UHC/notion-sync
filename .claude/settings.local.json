@@ -5,7 +5,9 @@
       "mcp__notion__notion-search",
       "mcp__notion__notion-update-data-source",
       "mcp__notion__notion-create-pages",
-      "mcp__notion__notion-update-page"
+      "mcp__notion__notion-update-page",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs"
     ]
   }
 }
