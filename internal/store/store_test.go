@@ -476,6 +476,83 @@ func TestUpsertPage_SpecialCharacters(t *testing.T) {
 	}
 }
 
+func TestGetPagesByDatabase(t *testing.T) {
+	s := setupTestStore(t)
+
+	pages := []PageData{
+		{ID: "p1", Title: "A", URL: "u", BodyMarkdown: "c", PropertiesJSON: "{}", LastEditedTime: "2026-01-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z", DatabaseID: "db-a"},
+		{ID: "p2", Title: "B", URL: "u", BodyMarkdown: "c", PropertiesJSON: "{}", LastEditedTime: "2026-02-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z", DatabaseID: "db-a"},
+		{ID: "p3", Title: "C", URL: "u", BodyMarkdown: "c", PropertiesJSON: "{}", LastEditedTime: "2026-03-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z", DatabaseID: "db-b"},
+	}
+	for _, p := range pages {
+		if err := s.UpsertPage(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Query db-a: should get 2 pages
+	result, err := s.GetPagesByDatabase("db-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 pages in db-a, got %d", len(result))
+	}
+
+	// Mark one deleted — should be excluded
+	s.MarkDeleted("p1")
+	result, err = s.GetPagesByDatabase("db-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 non-deleted page in db-a, got %d", len(result))
+	}
+	if result[0].ID != "p2" {
+		t.Errorf("expected p2, got %s", result[0].ID)
+	}
+}
+
+func TestGetPageLastEdited(t *testing.T) {
+	s := setupTestStore(t)
+
+	s.UpsertPage(PageData{
+		ID: "p1", Title: "A", URL: "u", BodyMarkdown: "c",
+		PropertiesJSON: "{}", LastEditedTime: "2026-02-15T10:30:00Z", FrozenAt: "2026-01-01T00:00:00Z",
+	})
+
+	// Existing page
+	got := s.GetPageLastEdited("p1")
+	if got != "2026-02-15T10:30:00Z" {
+		t.Errorf("expected '2026-02-15T10:30:00Z', got %q", got)
+	}
+
+	// Nonexistent page
+	got = s.GetPageLastEdited("nonexistent")
+	if got != "" {
+		t.Errorf("expected empty string for nonexistent page, got %q", got)
+	}
+
+	// Deleted page should return empty
+	s.MarkDeleted("p1")
+	got = s.GetPageLastEdited("p1")
+	if got != "" {
+		t.Errorf("expected empty string for deleted page, got %q", got)
+	}
+}
+
+func TestGetPagesByDatabase_Empty(t *testing.T) {
+	s := setupTestStore(t)
+
+	result, err := s.GetPagesByDatabase("nonexistent-db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 pages for nonexistent db, got %d", len(result))
+	}
+}
+
 func TestOpenStore_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 
