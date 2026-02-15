@@ -12,6 +12,7 @@ import (
 type Config struct {
 	APIKey              string `json:"apiKey,omitempty"`
 	DefaultOutputFolder string `json:"defaultOutputFolder,omitempty"`
+	OutputMode          string `json:"outputMode,omitempty"`
 }
 
 // DefaultConfig returns the default configuration.
@@ -48,6 +49,9 @@ func LoadConfig() (Config, error) {
 		if err := json.Unmarshal(data, &fileConfig); err == nil {
 			if fileConfig.DefaultOutputFolder != "" {
 				config.DefaultOutputFolder = fileConfig.DefaultOutputFolder
+			}
+			if fileConfig.OutputMode != "" {
+				config.OutputMode = fileConfig.OutputMode
 			}
 		}
 	}
