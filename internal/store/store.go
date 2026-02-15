@@ -102,6 +102,44 @@ func (s *Store) MarkDeleted(pageID string) error {
 	return nil
 }
 
+// PageSyncInfo holds minimal info for incremental sync checks.
+type PageSyncInfo struct {
+	ID             string
+	LastEditedTime string
+}
+
+// GetPagesByDatabase returns sync info for all non-deleted pages in a database.
+func (s *Store) GetPagesByDatabase(databaseID string) ([]PageSyncInfo, error) {
+	rows, err := s.db.Query(
+		"SELECT id, last_edited_time FROM pages WHERE database_id = ? AND deleted = 0",
+		databaseID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query pages by database: %w", err)
+	}
+	defer rows.Close()
+
+	var result []PageSyncInfo
+	for rows.Next() {
+		var p PageSyncInfo
+		if err := rows.Scan(&p.ID, &p.LastEditedTime); err != nil {
+			return nil, fmt.Errorf("scan page: %w", err)
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
+// GetPageLastEdited returns the last_edited_time for a specific page, or empty string if not found.
+func (s *Store) GetPageLastEdited(pageID string) string {
+	var lastEdited string
+	err := s.db.QueryRow("SELECT last_edited_time FROM pages WHERE id = ? AND deleted = 0", pageID).Scan(&lastEdited)
+	if err != nil {
+		return ""
+	}
+	return lastEdited
+}
+
 // SerializeProperties converts a frontmatter map to JSON for storage.
 func SerializeProperties(fm map[string]interface{}) (string, error) {
 	b, err := json.Marshal(fm)

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
+	"github.com/ran-codes/notion-sync/internal/store"
 	"github.com/ran-codes/notion-sync/internal/util"
 )
 
@@ -20,6 +22,8 @@ type FreezePageOptions struct {
 	DatabaseID   string
 	Page         *notion.Page // Pre-fetched page (optional)
 	Force        bool         // Skip timestamp check and always re-freeze
+	SQLStore     *store.Store // SQLite store (nil = skip SQLite writes)
+	OutputMode   OutputMode   // Controls markdown vs sqlite output
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -43,17 +47,29 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	// Check for re-freeze: compare last_edited_time
 	exists := fileExists(filePath)
-	if !opts.Force && exists {
-		content, err := os.ReadFile(filePath)
-		if err == nil {
-			fm, _ := frontmatter.Parse(string(content))
-			if fm != nil {
-				if storedEdited, ok := fm["notion-last-edited"].(string); ok {
-					if timestampsEqual(storedEdited, page.LastEditedTime) {
-						return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
+	if !opts.Force {
+		var storedEdited string
+
+		// Try markdown file first (for both/markdown modes)
+		if exists {
+			content, err := os.ReadFile(filePath)
+			if err == nil {
+				fm, _ := frontmatter.Parse(string(content))
+				if fm != nil {
+					if se, ok := fm["notion-last-edited"].(string); ok {
+						storedEdited = se
 					}
 				}
 			}
+		}
+
+		// Fall back to SQLite store (needed for sqlite-only mode)
+		if storedEdited == "" && opts.SQLStore != nil {
+			storedEdited = opts.SQLStore.GetPageLastEdited(opts.NotionID)
+		}
+
+		if storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
+			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
 		}
 	}
 
@@ -97,19 +113,52 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	content := frontmatter.BuildOrdered(fm, keyOrder, md)
 
-	// Ensure output folder exists
-	if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
-		return nil, fmt.Errorf("create output folder: %w", err)
+	mode := opts.OutputMode
+	if mode == "" {
+		mode = OutputBoth
 	}
 
-	// Write file
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	// Write markdown file (unless sqlite-only mode)
+	if mode != OutputSQLite {
+		if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
+			return nil, fmt.Errorf("create output folder: %w", err)
+		}
+		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+		// Preserve file mtime from Notion's last_edited_time
+		if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
+			os.Chtimes(filePath, lastEdited, lastEdited)
+		}
 	}
 
-	// Preserve file mtime from Notion's last_edited_time
-	if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
-		os.Chtimes(filePath, lastEdited, lastEdited)
+	// Write to SQLite store (warnings only, never blocks markdown sync)
+	if opts.SQLStore != nil {
+		frozenAt := time.Now().UTC().Format(time.RFC3339)
+		propsJSON, err := store.SerializeProperties(fm)
+		if err != nil {
+			log.Printf("warning: serialize properties for %s: %v", opts.NotionID, err)
+			propsJSON = "{}"
+		}
+		// Only store file_path if a markdown file was actually written
+		storedFilePath := ""
+		if mode != OutputSQLite {
+			storedFilePath = filePath
+		}
+		if err := opts.SQLStore.UpsertPage(store.PageData{
+			ID:             opts.NotionID,
+			Title:          title,
+			URL:            page.URL,
+			FilePath:       storedFilePath,
+			BodyMarkdown:   md,
+			PropertiesJSON: propsJSON,
+			CreatedTime:    formatTimeIfNotZero(page.CreatedTime),
+			LastEditedTime: page.LastEditedTime,
+			FrozenAt:       frozenAt,
+			DatabaseID:     opts.DatabaseID,
+		}); err != nil {
+			log.Printf("warning: SQLite upsert %s: %v", opts.NotionID, err)
+		}
 	}
 
 	status := "created"
@@ -289,6 +338,13 @@ func getUserName(p *notion.Person) string {
 		return *p.Name
 	}
 	return p.ID
+}
+
+func formatTimeIfNotZero(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func fileExists(path string) bool {
