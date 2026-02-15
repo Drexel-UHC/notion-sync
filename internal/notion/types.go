@@ -55,8 +55,17 @@ type Property struct {
 	Relation       []Relation   `json:"relation,omitempty"`
 	People         []Person     `json:"people,omitempty"`
 	Files          []File       `json:"files,omitempty"`
-	CreatedTime    string       `json:"created_time,omitempty"`
-	LastEditedTime string       `json:"last_edited_time,omitempty"`
+	CreatedTime    string         `json:"created_time,omitempty"`
+	LastEditedTime string         `json:"last_edited_time,omitempty"`
+	UniqueID       *UniqueIDValue `json:"unique_id,omitempty"`
+	CreatedBy      *Person        `json:"created_by,omitempty"`
+	LastEditedBy   *Person        `json:"last_edited_by,omitempty"`
+}
+
+// UniqueIDValue represents a unique_id property value.
+type UniqueIDValue struct {
+	Prefix string `json:"prefix"`
+	Number int    `json:"number"`
 }
 
 // SelectValue represents a select or status option.

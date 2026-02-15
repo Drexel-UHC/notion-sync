@@ -107,6 +107,11 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
+	// Preserve file mtime from Notion's last_edited_time
+	if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
+		os.Chtimes(filePath, lastEdited, lastEdited)
+	}
+
 	status := "created"
 	if exists {
 		status = "updated"
@@ -247,11 +252,43 @@ func mapPropertiesToFrontmatter(properties map[string]notion.Property, fm map[st
 		case "last_edited_time":
 			fm[key] = prop.LastEditedTime
 
-		// Skip formula, rollup, button, unique_id, verification — complex or non-user types
+		case "unique_id":
+			if prop.UniqueID != nil {
+				if prop.UniqueID.Prefix != "" {
+					fm[key] = fmt.Sprintf("%s-%d", prop.UniqueID.Prefix, prop.UniqueID.Number)
+				} else {
+					fm[key] = fmt.Sprintf("%d", prop.UniqueID.Number)
+				}
+			} else {
+				fm[key] = nil
+			}
+
+		case "created_by":
+			if prop.CreatedBy != nil {
+				fm[key] = getUserName(prop.CreatedBy)
+			} else {
+				fm[key] = nil
+			}
+
+		case "last_edited_by":
+			if prop.LastEditedBy != nil {
+				fm[key] = getUserName(prop.LastEditedBy)
+			} else {
+				fm[key] = nil
+			}
+
+		// Skip formula, rollup, button, verification — complex or non-user types
 		default:
 			// Skip unknown property types
 		}
 	}
+}
+
+func getUserName(p *notion.Person) string {
+	if p.Name != nil {
+		return *p.Name
+	}
+	return p.ID
 }
 
 func fileExists(path string) bool {
