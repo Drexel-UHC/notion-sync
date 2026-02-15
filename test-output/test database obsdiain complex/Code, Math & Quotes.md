@@ -1,7 +1,7 @@
 ---
 notion-id: 2fe57008-e885-819e-a0f9-c28e89f783fc
 notion-url: "https://www.notion.so/Code-Math-Quotes-2fe57008e885819ea0f9c28e89f783fc"
-notion-frozen-at: "2026-02-10T17:03:13Z"
+notion-frozen-at: "2026-02-15T23:02:38Z"
 notion-last-edited: "2026-02-05T19:44:00.000Z"
 notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0
 Approved: true
@@ -10,9 +10,12 @@ Attachments: []
 Category: Design
 "Contact Email": carol@example.com
 Created: "2026-02-05T19:44:00.000Z"
+"Created By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Description: Tests code blocks, equations, quotes, and callouts
 "Due Date": 2026-01-10
+ID: TASK-3
 "Last Edited": "2026-02-05T19:44:00.000Z"
+"Last Edited By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Phone: +81-3-1234-5678
 Related: []
 Score: 78.5

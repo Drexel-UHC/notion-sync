@@ -305,6 +305,100 @@ func TestMapPropertiesToFrontmatter_PeopleFallbackToID(t *testing.T) {
 	}
 }
 
+func TestMapPropertiesToFrontmatter_UniqueID(t *testing.T) {
+	props := map[string]notion.Property{
+		"ID": {
+			Type:     "unique_id",
+			UniqueID: &notion.UniqueIDValue{Prefix: "TASK", Number: 42},
+		},
+		"NoPrefixID": {
+			Type:     "unique_id",
+			UniqueID: &notion.UniqueIDValue{Prefix: "", Number: 7},
+		},
+		"NilID": {
+			Type:     "unique_id",
+			UniqueID: nil,
+		},
+	}
+
+	fm := map[string]interface{}{}
+	mapPropertiesToFrontmatter(props, fm)
+
+	if fm["ID"] != "TASK-42" {
+		t.Errorf("ID = %v, want TASK-42", fm["ID"])
+	}
+	if fm["NoPrefixID"] != "7" {
+		t.Errorf("NoPrefixID = %v, want 7", fm["NoPrefixID"])
+	}
+	if fm["NilID"] != nil {
+		t.Errorf("NilID = %v, want nil", fm["NilID"])
+	}
+}
+
+func TestMapPropertiesToFrontmatter_CreatedBy(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	props := map[string]notion.Property{
+		"Creator": {
+			Type:      "created_by",
+			CreatedBy: &notion.Person{ID: "user-1", Name: strPtr("Alice")},
+		},
+		"CreatorNoName": {
+			Type:      "created_by",
+			CreatedBy: &notion.Person{ID: "user-2", Name: nil},
+		},
+		"NilCreator": {
+			Type:      "created_by",
+			CreatedBy: nil,
+		},
+	}
+
+	fm := map[string]interface{}{}
+	mapPropertiesToFrontmatter(props, fm)
+
+	if fm["Creator"] != "Alice" {
+		t.Errorf("Creator = %v, want Alice", fm["Creator"])
+	}
+	if fm["CreatorNoName"] != "user-2" {
+		t.Errorf("CreatorNoName = %v, want user-2", fm["CreatorNoName"])
+	}
+	if fm["NilCreator"] != nil {
+		t.Errorf("NilCreator = %v, want nil", fm["NilCreator"])
+	}
+}
+
+func TestMapPropertiesToFrontmatter_LastEditedBy(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	props := map[string]notion.Property{
+		"Editor": {
+			Type:         "last_edited_by",
+			LastEditedBy: &notion.Person{ID: "user-1", Name: strPtr("Bob")},
+		},
+		"EditorNoName": {
+			Type:         "last_edited_by",
+			LastEditedBy: &notion.Person{ID: "user-3", Name: nil},
+		},
+		"NilEditor": {
+			Type:         "last_edited_by",
+			LastEditedBy: nil,
+		},
+	}
+
+	fm := map[string]interface{}{}
+	mapPropertiesToFrontmatter(props, fm)
+
+	if fm["Editor"] != "Bob" {
+		t.Errorf("Editor = %v, want Bob", fm["Editor"])
+	}
+	if fm["EditorNoName"] != "user-3" {
+		t.Errorf("EditorNoName = %v, want user-3", fm["EditorNoName"])
+	}
+	if fm["NilEditor"] != nil {
+		t.Errorf("NilEditor = %v, want nil", fm["NilEditor"])
+	}
+}
+
 func TestMapPropertiesToFrontmatter_UnknownTypeSkipped(t *testing.T) {
 	props := map[string]notion.Property{
 		"Formula": {Type: "formula"},

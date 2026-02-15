@@ -1,7 +1,7 @@
 ---
 notion-id: 30357008-e885-81b0-af21-c6dbbacc41fc
 notion-url: "https://www.notion.so/Database-Migration-Plan-30357008e88581b0af21c6dbbacc41fc"
-notion-frozen-at: "2026-02-10T17:03:18Z"
+notion-frozen-at: "2026-02-15T23:02:43Z"
 notion-last-edited: "2026-02-10T15:18:00.000Z"
 notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0
 Approved: true
@@ -10,9 +10,12 @@ Attachments: []
 Category: Engineering
 "Contact Email": karl@example.com
 Created: "2026-02-10T15:18:00.000Z"
+"Created By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Description: Plan for migrating from PostgreSQL 14 to 16 with zero downtime
 "Due Date": 2026-06-01 → 2026-06-30
+ID: TASK-13
 "Last Edited": "2026-02-10T15:18:00.000Z"
+"Last Edited By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Phone: +49-30-9876543
 Related: []
 Score: 71

@@ -1,7 +1,7 @@
 ---
 notion-id: 2fe57008-e885-8187-8270-dea9ccb27b41
 notion-url: "https://www.notion.so/Lists-Tasks-2fe57008e88581878270dea9ccb27b41"
-notion-frozen-at: "2026-02-10T17:03:07Z"
+notion-frozen-at: "2026-02-15T23:02:35Z"
 notion-last-edited: "2026-02-05T19:44:00.000Z"
 notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0
 Approved: false
@@ -10,9 +10,12 @@ Attachments: []
 Category: Engineering
 "Contact Email": bob@example.com
 Created: "2026-02-05T19:44:00.000Z"
+"Created By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Description: Tests bulleted lists, numbered lists, and to-do items with nesting
 "Due Date": 2026-02-01 → 2026-04-30
+ID: TASK-1
 "Last Edited": "2026-02-05T19:44:00.000Z"
+"Last Edited By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Phone: +44-20-7946-0958
 Related: []
 Score: 42
