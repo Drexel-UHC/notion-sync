@@ -1,8 +1,8 @@
 ---
 notion-id: 2fe57008-e885-81a2-8f5d-d6202c756d8f
 notion-url: "https://www.notion.so/Tables-Columns-2fe57008e88581a28f5dd6202c756d8f"
-notion-frozen-at: "2026-02-10T17:03:16Z"
-notion-last-edited: "2026-02-05T19:44:00.000Z"
+notion-frozen-at: "2026-02-15T23:02:40Z"
+notion-last-edited: "2026-02-15T23:02:00.000Z"
 notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0
 Approved: true
 Assignee: []
@@ -10,13 +10,16 @@ Attachments: []
 Category: Research
 "Contact Email": eve@example.com
 Created: "2026-02-05T19:44:00.000Z"
+"Created By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Description: Tests tables, column layouts, and structural blocks
 "Due Date": "2026-06-15T09:00:00.000+00:00"
-"Last Edited": "2026-02-05T19:44:00.000Z"
+ID: TASK-4
+"Last Edited": "2026-02-15T23:02:00.000Z"
+"Last Edited By": 38e28bb6-9eb7-4b0d-bdd5-9720fb8dad03
 Phone: +49-30-1234567
 Related:
   - 2fe57008-e885-8198-ad39-e0a2a491a675
-Score: 100
+Score: 99
 Tags:
   - frontend
   - backend
@@ -54,3 +57,4 @@ $$
 $$
 ## Final Section
 This page tests structural and layout blocks. The sync tool should handle tables as markdown pipe tables and columns separated by `---` dividers.
+<!-- sync-test -->
