@@ -499,8 +499,15 @@ func TestGetPagesByDatabase(t *testing.T) {
 		t.Fatalf("expected 2 pages in db-a, got %d", len(result))
 	}
 
+	// Verify LastEditedTime field is populated
+	if result[0].LastEditedTime == "" && result[1].LastEditedTime == "" {
+		t.Error("expected LastEditedTime to be populated on returned pages")
+	}
+
 	// Mark one deleted — should be excluded
-	s.MarkDeleted("p1")
+	if err := s.MarkDeleted("p1"); err != nil {
+		t.Fatal(err)
+	}
 	result, err = s.GetPagesByDatabase("db-a")
 	if err != nil {
 		t.Fatal(err)
@@ -516,10 +523,12 @@ func TestGetPagesByDatabase(t *testing.T) {
 func TestGetPageLastEdited(t *testing.T) {
 	s := setupTestStore(t)
 
-	s.UpsertPage(PageData{
+	if err := s.UpsertPage(PageData{
 		ID: "p1", Title: "A", URL: "u", BodyMarkdown: "c",
 		PropertiesJSON: "{}", LastEditedTime: "2026-02-15T10:30:00Z", FrozenAt: "2026-01-01T00:00:00Z",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Existing page
 	got := s.GetPageLastEdited("p1")
@@ -533,8 +542,22 @@ func TestGetPageLastEdited(t *testing.T) {
 		t.Errorf("expected empty string for nonexistent page, got %q", got)
 	}
 
+	// After update, should return new timestamp
+	if err := s.UpsertPage(PageData{
+		ID: "p1", Title: "A", URL: "u", BodyMarkdown: "c",
+		PropertiesJSON: "{}", LastEditedTime: "2026-02-16T12:00:00Z", FrozenAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got = s.GetPageLastEdited("p1")
+	if got != "2026-02-16T12:00:00Z" {
+		t.Errorf("expected updated timestamp '2026-02-16T12:00:00Z', got %q", got)
+	}
+
 	// Deleted page should return empty
-	s.MarkDeleted("p1")
+	if err := s.MarkDeleted("p1"); err != nil {
+		t.Fatal(err)
+	}
 	got = s.GetPageLastEdited("p1")
 	if got != "" {
 		t.Errorf("expected empty string for deleted page, got %q", got)
