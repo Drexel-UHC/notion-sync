@@ -1,7 +1,7 @@
 ---
 name: test-complex
 description: Run integration test against the complex test database (import, refresh, --ids, --force)
-version: 1.4.0
+version: 1.5.0
 args: "[--verbose]"
 ---
 
@@ -57,6 +57,21 @@ Pick a page ID from the synced files. Run:
 ### Step 7: Test --force flag
 Run: `./notion-sync.exe refresh "./test-output/test database obsdiain complex" --force`
 - **Pass criteria:** updated = total, skipped = 0.
+
+### Step 8: Verify property output
+Grep the synced `.md` files in `./test-output/test database obsdiain complex/` for the following frontmatter keys and validate:
+
+| Key | Check |
+|---|---|
+| `unique_id` | Present in at least one file, value matches pattern `PREFIX-N` or just `N` (digits) |
+| `created_by` | Present in at least one file, value is a non-empty string (user name or ID) |
+| `last_edited_by` | Present in at least one file, value is a non-empty string (user name or ID) |
+
+- **Pass criteria:** All 3 keys found with valid non-null values.
+
+### Step 9: Verify file mtime preservation
+For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
+- **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
 
 ## Done
 Summarize all step results in a table with columns: Step | Action | Result | Git Analysis.

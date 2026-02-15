@@ -43,6 +43,9 @@ Use `update-data-source` to add all supported property types to the database sch
 | Related        | relation          | Self-relation: `{"data_source_id": "<this db's data_source_id>", "type": "single_property", "single_property": {}}` |
 | Created        | created_time      | `{}`                                                                   |
 | Last Edited    | last_edited_time  | `{}`                                                                   |
+| Created By     | created_by        | `{}`                                                                   |
+| Last Edited By | last_edited_by    | `{}`                                                                   |
+| ID             | unique_id         | `{"prefix": "TASK"}`                                                   |
 
 ### Known Limitations
 
@@ -213,6 +216,9 @@ This tests the `relation` property type producing arrays of page IDs in frontmat
 | files             | 0 of 5    | All empty  | (needs file upload) |
 | created_time      | All 5     | -          | Auto-set |
 | last_edited_time  | All 5     | -          | Auto-set |
+| created_by        | All 5     | -          | Auto-set |
+| last_edited_by    | All 5     | -          | Auto-set |
+| unique_id         | All 5     | -          | Auto-set, TASK-1 through TASK-5 |
 
 ---
 
@@ -260,7 +266,7 @@ This tests the `relation` property type producing arrays of page IDs in frontmat
 
 These block/property types are either unsupported by `notion-sync` or cannot be created via the Notion MCP:
 
-**Properties:** status (can't create via API), formula, rollup, button, unique_id, verification
+**Properties:** status (can't create via API), formula, rollup, button, verification
 
 **Blocks:** child_page, child_database, link_to_page, synced_block, video, audio, file, pdf, embed (as block), table_of_contents, breadcrumb
 
