@@ -47,17 +47,29 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	// Check for re-freeze: compare last_edited_time
 	exists := fileExists(filePath)
-	if !opts.Force && exists {
-		content, err := os.ReadFile(filePath)
-		if err == nil {
-			fm, _ := frontmatter.Parse(string(content))
-			if fm != nil {
-				if storedEdited, ok := fm["notion-last-edited"].(string); ok {
-					if timestampsEqual(storedEdited, page.LastEditedTime) {
-						return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
+	if !opts.Force {
+		var storedEdited string
+
+		// Try markdown file first (for both/markdown modes)
+		if exists {
+			content, err := os.ReadFile(filePath)
+			if err == nil {
+				fm, _ := frontmatter.Parse(string(content))
+				if fm != nil {
+					if se, ok := fm["notion-last-edited"].(string); ok {
+						storedEdited = se
 					}
 				}
 			}
+		}
+
+		// Fall back to SQLite store (needed for sqlite-only mode)
+		if storedEdited == "" && opts.SQLStore != nil {
+			storedEdited = opts.SQLStore.GetPageLastEdited(opts.NotionID)
+		}
+
+		if storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
+			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
 		}
 	}
 
@@ -128,14 +140,19 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 			log.Printf("warning: serialize properties for %s: %v", opts.NotionID, err)
 			propsJSON = "{}"
 		}
+		// Only store file_path if a markdown file was actually written
+		storedFilePath := ""
+		if mode != OutputSQLite {
+			storedFilePath = filePath
+		}
 		if err := opts.SQLStore.UpsertPage(store.PageData{
 			ID:             opts.NotionID,
 			Title:          title,
 			URL:            page.URL,
-			FilePath:       filePath,
+			FilePath:       storedFilePath,
 			BodyMarkdown:   md,
 			PropertiesJSON: propsJSON,
-			CreatedTime:    page.CreatedTime.Format(time.RFC3339),
+			CreatedTime:    formatTimeIfNotZero(page.CreatedTime),
 			LastEditedTime: page.LastEditedTime,
 			FrozenAt:       frozenAt,
 			DatabaseID:     opts.DatabaseID,
@@ -321,6 +338,13 @@ func getUserName(p *notion.Person) string {
 		return *p.Name
 	}
 	return p.ID
+}
+
+func formatTimeIfNotZero(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 func fileExists(path string) bool {

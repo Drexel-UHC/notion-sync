@@ -355,20 +355,43 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 	}
 
-	// Mark deleted entries
+	// Mark deleted entries (from filesystem scan)
 	for id, info := range localFiles {
 		if !allEntryIDs[id] {
+			marked := false
 			if mode != OutputSQLite {
 				if err := markAsDeleted(info.filePath); err == nil {
-					result.Deleted++
+					marked = true
 				}
 			}
 			if sqlStore != nil {
 				if err := sqlStore.MarkDeleted(id); err != nil {
 					log.Printf("warning: SQLite mark-deleted %s: %v", id, err)
+				} else {
+					marked = true
 				}
-				if mode == OutputSQLite {
-					result.Deleted++
+			}
+			if marked {
+				result.Deleted++
+			}
+		}
+	}
+
+	// In sqlite-only mode, also check SQLite store for pages that no longer exist in Notion
+	if mode == OutputSQLite && sqlStore != nil {
+		storedPages, err := sqlStore.GetPagesByDatabase(databaseID)
+		if err != nil {
+			log.Printf("warning: query stored pages for delete check: %v", err)
+		} else {
+			for _, sp := range storedPages {
+				if !allEntryIDs[sp.ID] {
+					if _, inLocal := localFiles[sp.ID]; !inLocal {
+						if err := sqlStore.MarkDeleted(sp.ID); err != nil {
+							log.Printf("warning: SQLite mark-deleted %s: %v", sp.ID, err)
+						} else {
+							result.Deleted++
+						}
+					}
 				}
 			}
 		}
