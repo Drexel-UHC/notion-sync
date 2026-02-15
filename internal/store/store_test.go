@@ -363,6 +363,119 @@ func TestMultipleDatabases(t *testing.T) {
 	}
 }
 
+func TestFTS_DeletedPagesStillSearchable(t *testing.T) {
+	s := setupTestStore(t)
+
+	data := PageData{
+		ID: "p1", Title: "Searchable Page", URL: "u",
+		BodyMarkdown: "unique findable content",
+		PropertiesJSON: "{}", LastEditedTime: "2026-01-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z",
+	}
+	if err := s.UpsertPage(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDeleted("p1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// MarkDeleted uses UPDATE, which fires pages_au trigger.
+	// Deleted pages remain in FTS — filter at query time with JOIN if needed.
+	var count int
+	s.db.QueryRow("SELECT count(*) FROM pages_fts WHERE pages_fts MATCH 'findable'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected deleted page to still be in FTS index, got %d matches", count)
+	}
+}
+
+func TestFTS_IntegrityCheck(t *testing.T) {
+	s := setupTestStore(t)
+
+	pages := []PageData{
+		{ID: "p1", Title: "Alpha", URL: "u", BodyMarkdown: "first", PropertiesJSON: "{}", LastEditedTime: "2026-01-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z"},
+		{ID: "p2", Title: "Beta", URL: "u", BodyMarkdown: "second", PropertiesJSON: "{}", LastEditedTime: "2026-01-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z"},
+	}
+	for _, p := range pages {
+		if err := s.UpsertPage(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Update one to exercise DELETE+INSERT trigger path
+	pages[0].Title = "Alpha Updated"
+	pages[0].BodyMarkdown = "first updated"
+	if err := s.UpsertPage(pages[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	// FTS5 integrity-check verifies index consistency with content table
+	_, err := s.db.Exec("INSERT INTO pages_fts(pages_fts) VALUES('integrity-check')")
+	if err != nil {
+		t.Fatalf("FTS integrity check failed: %v", err)
+	}
+}
+
+func TestFTS_SurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+
+	s1, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.UpsertPage(PageData{
+		ID: "p1", Title: "Persistent Search", URL: "u", BodyMarkdown: "survives reopen",
+		PropertiesJSON: "{}", LastEditedTime: "2026-01-01T00:00:00Z", FrozenAt: "2026-01-01T00:00:00Z",
+	})
+	s1.Close()
+
+	s2, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	var count int
+	err = s2.db.QueryRow("SELECT count(*) FROM pages_fts WHERE pages_fts MATCH 'survives'").Scan(&count)
+	if err != nil {
+		t.Fatalf("FTS query after reopen: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected FTS to survive reopen, got %d matches", count)
+	}
+}
+
+func TestUpsertPage_SpecialCharacters(t *testing.T) {
+	s := setupTestStore(t)
+
+	data := PageData{
+		ID:             "p1",
+		Title:          `It's a "test" — with 'quotes' & <tags>`,
+		URL:            "https://notion.so/test?foo=bar&baz=1",
+		FilePath:       `/output/db/It's a "test".md`,
+		BodyMarkdown:   "# Heading\n\n```go\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n```\n\nUnicode: 日本語 🎉 émojis",
+		PropertiesJSON: `{"key":"value with \"quotes\""}`,
+		CreatedTime:    "2026-01-01T00:00:00Z",
+		LastEditedTime: "2026-02-01T00:00:00Z",
+		FrozenAt:       "2026-02-15T00:00:00Z",
+		DatabaseID:     "db-1",
+	}
+
+	if err := s.UpsertPage(data); err != nil {
+		t.Fatalf("UpsertPage with special chars: %v", err)
+	}
+
+	var title, body string
+	err := s.db.QueryRow("SELECT title, body_markdown FROM pages WHERE id = ?", "p1").Scan(&title, &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != data.Title {
+		t.Errorf("title mismatch: got %q", title)
+	}
+	if body != data.BodyMarkdown {
+		t.Errorf("body mismatch: got %q", body)
+	}
+}
+
 func TestOpenStore_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 

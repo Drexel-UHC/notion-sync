@@ -40,16 +40,28 @@ func OpenStore(workspacePath string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	// Enable WAL mode for concurrent reads
+	// Force single connection — PRAGMAs like recursive_triggers are per-connection,
+	// and the connection pool would create new connections without them.
+	// Fine for a CLI tool; we don't need concurrent DB writers.
+	db.SetMaxOpenConns(1)
+
+	// Enable WAL mode for concurrent reads (persists in DB file)
 	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 
-	// Required for FTS5 correctness with INSERT OR REPLACE
+	// Required for FTS5 correctness with INSERT OR REPLACE —
+	// without this, the implicit DELETE in REPLACE doesn't fire AFTER DELETE triggers.
 	if _, err := db.Exec("PRAGMA recursive_triggers = 1"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("set recursive_triggers: %w", err)
+	}
+
+	// Wait up to 5s if another process holds a lock (e.g. sqlite3 CLI during debugging)
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
 
 	s := &Store{db: db, path: dbPath}
@@ -94,20 +106,25 @@ func (s *Store) MarkDeleted(pageID string) error {
 func SerializeProperties(fm map[string]interface{}) (string, error) {
 	b, err := json.Marshal(fm)
 	if err != nil {
-		return "{}", fmt.Errorf("serialize properties: %w", err)
+		return "", fmt.Errorf("serialize properties: %w", err)
 	}
 	return string(b), nil
 }
 
 func (s *Store) initSchema() error {
-	schema := `
-		CREATE TABLE IF NOT EXISTS _meta (
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS _meta (
 			key TEXT PRIMARY KEY,
 			value TEXT
-		);
-		INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1');
-
-		CREATE TABLE IF NOT EXISTS pages (
+		)`,
+		`INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '1')`,
+		`CREATE TABLE IF NOT EXISTS pages (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
 			url TEXT NOT NULL,
@@ -119,32 +136,51 @@ func (s *Store) initSchema() error {
 			frozen_at TEXT NOT NULL,
 			deleted INTEGER DEFAULT 0,
 			database_id TEXT
-		);
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pages_database_id ON pages(database_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_pages_last_edited ON pages(last_edited_time)`,
+	}
 
-		CREATE INDEX IF NOT EXISTS idx_pages_database_id ON pages(database_id);
-		CREATE INDEX IF NOT EXISTS idx_pages_last_edited ON pages(last_edited_time);
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("schema stmt: %w", err)
+		}
+	}
 
-		CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema: %w", err)
+	}
+
+	// FTS5 virtual tables and triggers cannot be created inside a transaction
+	// in some SQLite builds, so run them outside the transaction.
+	fts := []string{
+		`CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
 			title, body_markdown, content=pages, content_rowid=rowid
-		);
-
-		CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+		)`,
+		// AFTER INSERT — index new pages
+		`CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
 			INSERT INTO pages_fts(rowid, title, body_markdown)
 			VALUES (new.rowid, new.title, new.body_markdown);
-		END;
-
-		CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+		END`,
+		// AFTER DELETE — remove from FTS index
+		`CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
 			INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
 			VALUES('delete', old.rowid, old.title, old.body_markdown);
-		END;
-
-		CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+		END`,
+		// AFTER UPDATE — re-index (covers MarkDeleted and any future direct UPDATEs)
+		`CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
 			INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
 			VALUES('delete', old.rowid, old.title, old.body_markdown);
 			INSERT INTO pages_fts(rowid, title, body_markdown)
 			VALUES (new.rowid, new.title, new.body_markdown);
-		END;
-	`
-	_, err := s.db.Exec(schema)
-	return err
+		END`,
+	}
+
+	for _, stmt := range fts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("fts stmt: %w", err)
+		}
+	}
+
+	return nil
 }
