@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
+	"github.com/ran-codes/notion-sync/internal/store"
 	"github.com/ran-codes/notion-sync/internal/util"
 )
 
@@ -20,6 +22,8 @@ type FreezePageOptions struct {
 	DatabaseID   string
 	Page         *notion.Page // Pre-fetched page (optional)
 	Force        bool         // Skip timestamp check and always re-freeze
+	SQLStore     *store.Store // SQLite store (nil = skip SQLite writes)
+	OutputMode   OutputMode   // Controls markdown vs sqlite output
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -97,19 +101,47 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	content := frontmatter.BuildOrdered(fm, keyOrder, md)
 
-	// Ensure output folder exists
-	if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
-		return nil, fmt.Errorf("create output folder: %w", err)
+	mode := opts.OutputMode
+	if mode == "" {
+		mode = OutputBoth
 	}
 
-	// Write file
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return nil, fmt.Errorf("write file: %w", err)
+	// Write markdown file (unless sqlite-only mode)
+	if mode != OutputSQLite {
+		if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
+			return nil, fmt.Errorf("create output folder: %w", err)
+		}
+		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+			return nil, fmt.Errorf("write file: %w", err)
+		}
+		// Preserve file mtime from Notion's last_edited_time
+		if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
+			os.Chtimes(filePath, lastEdited, lastEdited)
+		}
 	}
 
-	// Preserve file mtime from Notion's last_edited_time
-	if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
-		os.Chtimes(filePath, lastEdited, lastEdited)
+	// Write to SQLite store (warnings only, never blocks markdown sync)
+	if opts.SQLStore != nil {
+		frozenAt := time.Now().UTC().Format(time.RFC3339)
+		propsJSON, err := store.SerializeProperties(fm)
+		if err != nil {
+			log.Printf("warning: serialize properties for %s: %v", opts.NotionID, err)
+			propsJSON = "{}"
+		}
+		if err := opts.SQLStore.UpsertPage(store.PageData{
+			ID:             opts.NotionID,
+			Title:          title,
+			URL:            page.URL,
+			FilePath:       filePath,
+			BodyMarkdown:   md,
+			PropertiesJSON: propsJSON,
+			CreatedTime:    page.CreatedTime.Format(time.RFC3339),
+			LastEditedTime: page.LastEditedTime,
+			FrozenAt:       frozenAt,
+			DatabaseID:     opts.DatabaseID,
+		}); err != nil {
+			log.Printf("warning: SQLite upsert %s: %v", opts.NotionID, err)
+		}
 	}
 
 	status := "created"
