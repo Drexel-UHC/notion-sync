@@ -138,3 +138,23 @@ Total: 13 pages (7 Projects + 6 Clients).
 7. Cross-source relation property (`Client`) added to Projects, pointing to Clients data source
 8. Relations wired: Alpha→Delta, Beta→Echo+Foxtrot, Gamma→Delta
 9. Edge case pages added to both sources
+
+---
+
+## Testing Watchlist
+
+Things to watch out for when running integration tests against this database:
+
+- **Subfolder naming changes** — if a data source is renamed in Notion (e.g. "Projects" → "Project Tracker"), refresh will create a new subfolder instead of updating the old one. Stale subfolder left behind.
+- **Relation IDs are cross-source** — the `Client` property on Projects pages contains page IDs that live in the Clients data source. These IDs won't resolve to local filenames unless both sources are imported.
+- **"test" page in Clients** — there's a stray "test" page that was created during manual setup of the second data source. It will appear in imports. Don't count on exactly 6 Clients rows — there may be 7.
+- **Filename sanitization is lossy** — `Edge: Special Ch@rs & "Quotes" / Slashes \ (Parens)` becomes `Edge- Special Ch@rs & -Quotes- - Slashes  (Parens).md`. The original title can't be reconstructed from the filename; only from frontmatter `notion-id`.
+- **Long filename may truncate on some OS** — the unicode long title page works on Windows/macOS but may hit limits on older Linux filesystems (ext3 = 255 bytes, and multibyte chars use 2+ bytes each).
+- **Duplicate Name exists in both subfolders** — `Projects/Duplicate Name.md` and `Clients/Duplicate Name.md` are different pages with different properties. Don't confuse them in test assertions.
+- **Negative number in YAML** — `Revenue: -500.75` must be parsed as a float, not a string. Some YAML parsers may choke if not handled.
+- **Zero vs null** — `Score: 0` (Edge: Special Ch@rs) and `Score: null` (Edge: All Nulls) are different. Make sure the tool doesn't treat 0 as null or vice versa.
+- **Empty page body** — `Edge: All Nulls` and `Edge: Empty Everything` have no content after frontmatter. The `.md` file should still be valid (frontmatter + empty body).
+- **Checkbox false vs null** — `Active: false` and a missing `Active` property are semantically different. Notion always returns `false` for unchecked checkboxes, never null.
+- **Multi-relation ordering** — `Beta Analysis` has 2 Client relations. The order of IDs in the frontmatter array may not be deterministic across refreshes.
+- **Top-level `_database.json`** — the parent folder has its own metadata file with no `dataSourceId`. Don't confuse it with the per-source ones inside subfolders.
+- **`notion-database-id` is the same** — all 13 pages share the same `notion-database-id` in frontmatter (the parent database ID), even though they come from different data sources. The data source distinction is only in `_database.json`.
