@@ -13,10 +13,17 @@ type Database struct {
 	DataSources []DataSource `json:"data_sources,omitempty"`
 }
 
-// DataSource represents a data source within a database.
+// DataSource represents a data source reference within a database.
 type DataSource struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
+}
+
+// DataSourceDetail represents the full data source response from GET /data_sources/{id}.
+type DataSourceDetail struct {
+	ID    string     `json:"id"`
+	Type  string     `json:"type"`
+	Title []RichText `json:"title,omitempty"`
 }
 
 // Page represents a Notion page response.

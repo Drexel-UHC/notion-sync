@@ -3,6 +3,7 @@ package sync
 // FrozenDatabase represents metadata stored in _database.json.
 type FrozenDatabase struct {
 	DatabaseID   string `json:"databaseId"`
+	DataSourceID string `json:"dataSourceId,omitempty"`
 	Title        string `json:"title"`
 	URL          string `json:"url"`
 	FolderPath   string `json:"folderPath"`
