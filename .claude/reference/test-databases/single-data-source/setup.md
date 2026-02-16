@@ -1,5 +1,8 @@
 # Test Database: Complex (Property & Block Coverage)
 
+**URL:** https://www.notion.so/2fe57008e8858003b1f3cc05981dc6b0
+**Database ID:** `2fe57008-e885-8003-b1f3-cc05981dc6b0`
+
 Reproducible protocol for creating a comprehensive Notion test database that exercises all supported property types and block types in `notion-sync`.
 
 ---
