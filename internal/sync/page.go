@@ -16,7 +16,7 @@ import (
 
 // FreezePageOptions contains options for freezing a page.
 type FreezePageOptions struct {
-	Client       *notion.Client
+	Client       NotionClient
 	NotionID     string
 	OutputFolder string
 	DatabaseID   string

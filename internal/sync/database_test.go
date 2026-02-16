@@ -190,6 +190,91 @@ func TestScanLocalFiles_MillisecondTimestamp(t *testing.T) {
 	}
 }
 
+func TestFindSubSourceFolders_Empty(t *testing.T) {
+	dir := t.TempDir()
+	folders := findSubSourceFolders(dir)
+	if len(folders) != 0 {
+		t.Errorf("expected 0 folders, got %d", len(folders))
+	}
+}
+
+func TestFindSubSourceFolders_WithDataSourceID(t *testing.T) {
+	dir := t.TempDir()
+
+	// Subfolder with dataSourceId in metadata
+	sub := filepath.Join(dir, "Projects")
+	os.MkdirAll(sub, 0755)
+	WriteDatabaseMetadata(sub, &FrozenDatabase{
+		DatabaseID:   "db-1",
+		DataSourceID: "ds-1",
+		Title:        "Projects",
+		FolderPath:   sub,
+	})
+
+	folders := findSubSourceFolders(dir)
+	if len(folders) != 1 {
+		t.Fatalf("expected 1 folder, got %d", len(folders))
+	}
+	if folders[0] != sub {
+		t.Errorf("expected %s, got %s", sub, folders[0])
+	}
+}
+
+func TestFindSubSourceFolders_WithoutDataSourceID(t *testing.T) {
+	dir := t.TempDir()
+
+	// Subfolder with metadata but no dataSourceId
+	sub := filepath.Join(dir, "Notes")
+	os.MkdirAll(sub, 0755)
+	WriteDatabaseMetadata(sub, &FrozenDatabase{
+		DatabaseID: "db-1",
+		Title:      "Notes",
+		FolderPath: sub,
+	})
+
+	folders := findSubSourceFolders(dir)
+	if len(folders) != 0 {
+		t.Errorf("expected 0 folders (no dataSourceId), got %d", len(folders))
+	}
+}
+
+func TestFindSubSourceFolders_Mixed(t *testing.T) {
+	dir := t.TempDir()
+
+	// Sub with dataSourceId
+	sub1 := filepath.Join(dir, "Source1")
+	os.MkdirAll(sub1, 0755)
+	WriteDatabaseMetadata(sub1, &FrozenDatabase{
+		DatabaseID:   "db-1",
+		DataSourceID: "ds-1",
+		Title:        "Source1",
+		FolderPath:   sub1,
+	})
+
+	// Sub without dataSourceId
+	sub2 := filepath.Join(dir, "Source2")
+	os.MkdirAll(sub2, 0755)
+	WriteDatabaseMetadata(sub2, &FrozenDatabase{
+		DatabaseID: "db-1",
+		Title:      "Source2",
+		FolderPath: sub2,
+	})
+
+	// Regular file (not a directory)
+	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hi"), 0644)
+
+	// Sub with no metadata at all
+	os.MkdirAll(filepath.Join(dir, "Empty"), 0755)
+
+	folders := findSubSourceFolders(dir)
+	if len(folders) != 1 {
+		t.Fatalf("expected 1 folder, got %d", len(folders))
+	}
+	if folders[0] != sub1 {
+		t.Errorf("expected %s, got %s", sub1, folders[0])
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

@@ -131,6 +131,102 @@ title: Hello
 	}
 }
 
+func TestBuildAndParseRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		val  interface{}
+		want interface{} // expected after Parse (nil means same as val)
+	}{
+		{"negative number", "score", float64(-42.5), float64(-42.5)},
+		{"zero number", "count", float64(0), 0},                       // yaml parses int 0 as int
+		{"large number", "big", float64(999999.99), float64(999999.99)},
+		{"string with colon", "label", "key: value", "key: value"},
+		{"unicode", "name", "Très résumé 日本語", "Très résumé 日本語"},
+		{"empty array", "tags", []interface{}{}, []interface{}{}},
+		{"nil value", "empty", nil, nil},
+		{"boolean-like string true", "status", "true", "true"},
+		{"boolean-like string false", "flag", "false", "false"},
+		{"boolean-like string null", "nothing", "null", "null"},
+		{"timestamp string", "edited", "2025-01-15T10:30:00Z", "2025-01-15T10:30:00Z"},
+		{"negative integer-like float", "neg", float64(-7), -7},
+		{"string starting with dash", "note", "-starts-here", "-starts-here"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm := map[string]interface{}{tt.key: tt.val}
+			content := Build(fm, "body")
+
+			parsed, err := Parse(content)
+			if err != nil {
+				t.Fatalf("Parse error: %v", err)
+			}
+
+			want := tt.want
+			if want == nil {
+				want = tt.val
+			}
+			got := parsed[tt.key]
+
+			// Handle nil comparison
+			if want == nil {
+				if got != nil {
+					t.Errorf("key %q: got %v (%T), want nil", tt.key, got, got)
+				}
+				return
+			}
+
+			// Handle empty array
+			if wantArr, ok := want.([]interface{}); ok {
+				gotArr, ok := got.([]interface{})
+				if !ok {
+					// yaml.v3 returns nil for empty arrays parsed from "[]"
+					if len(wantArr) == 0 && got == nil {
+						return
+					}
+					t.Errorf("key %q: got %T, want []interface{}", tt.key, got)
+					return
+				}
+				if len(gotArr) != len(wantArr) {
+					t.Errorf("key %q: len = %d, want %d", tt.key, len(gotArr), len(wantArr))
+				}
+				return
+			}
+
+			if got != want {
+				t.Errorf("key %q: got %v (%T), want %v (%T)", tt.key, got, got, want, want)
+			}
+		})
+	}
+}
+
+func TestFormatYamlEntry_BoundaryNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		val  interface{}
+		want string
+	}{
+		{"negative float", float64(-42.5), "n: -42.5"},
+		{"zero", float64(0), "n: 0"},
+		{"large float", float64(999999.99), "n: 999999.99"},
+		{"integer-like float", float64(100), "n: 100"},
+		{"negative integer-like", float64(-7), "n: -7"},
+		{"very small", float64(0.001), "n: 0.001"},
+		{"int type", 42, "n: 42"},
+		{"int64 type", int64(9999999), "n: 9999999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatYamlEntry("n", tt.val)
+			if got != tt.want {
+				t.Errorf("formatYamlEntry(\"n\", %v) = %q, want %q", tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestYamlEscapeString(t *testing.T) {
 	tests := []struct {
 		input    string

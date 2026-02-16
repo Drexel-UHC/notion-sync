@@ -18,7 +18,7 @@ import (
 
 // DatabaseImportOptions contains options for importing a database.
 type DatabaseImportOptions struct {
-	Client       *notion.Client
+	Client       NotionClient
 	DatabaseID   string
 	OutputFolder string
 	OutputMode   OutputMode // "both" (default), "markdown", or "sqlite"
@@ -26,7 +26,7 @@ type DatabaseImportOptions struct {
 
 // RefreshOptions contains options for refreshing a database.
 type RefreshOptions struct {
-	Client     *notion.Client
+	Client     NotionClient
 	FolderPath string
 	Force      bool       // Skip timestamp comparison and resync all entries
 	PageIDs    []string   // If set, only refresh these specific page IDs
@@ -64,7 +64,7 @@ type dataSourceInfo struct {
 
 // resolveDataSources determines the data sources and folder layout for a database.
 // Single-source databases stay flat; multi-source databases get subfolders.
-func resolveDataSources(client *notion.Client, database *notion.Database, dbTitle, baseFolderPath string) ([]dataSourceInfo, error) {
+func resolveDataSources(client NotionClient, database *notion.Database, dbTitle, baseFolderPath string) ([]dataSourceInfo, error) {
 	if len(database.DataSources) == 0 {
 		return nil, fmt.Errorf("database has no data sources; ensure you are using Notion API version 2025-09-03 or later")
 	}
@@ -197,7 +197,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 
 // importEntries processes a batch of entries, updating result counters and calling onProgress.
 func importEntries(
-	client *notion.Client,
+	client NotionClient,
 	entries []notion.Page,
 	folderPath, databaseID string,
 	mode OutputMode,

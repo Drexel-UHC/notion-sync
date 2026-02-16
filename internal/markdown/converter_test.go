@@ -593,6 +593,162 @@ func TestEmojiToCalloutType(t *testing.T) {
 	}
 }
 
+// mockBlockFetcher returns pre-configured blocks by ID for testing nested conversions.
+type mockBlockFetcher struct {
+	blocks map[string][]notion.Block
+}
+
+func (m *mockBlockFetcher) FetchAllBlocks(blockID string) ([]notion.Block, error) {
+	blocks, ok := m.blocks[blockID]
+	if !ok {
+		return []notion.Block{}, nil
+	}
+	return blocks, nil
+}
+
+func TestConvertBlocksToMarkdown_NestedBulletedList(t *testing.T) {
+	mock := &mockBlockFetcher{
+		blocks: map[string][]notion.Block{
+			"parent-1": {
+				{Type: "bulleted_list_item", BulletedListItem: &notion.ListItemBlock{
+					RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Child A"}}},
+				}},
+				{Type: "bulleted_list_item", BulletedListItem: &notion.ListItemBlock{
+					RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Child B"}}},
+				}},
+			},
+		},
+	}
+	ctx := &ConvertContext{Client: mock, IndentLevel: 0}
+
+	blocks := []notion.Block{
+		{
+			ID:   "parent-1",
+			Type: "bulleted_list_item",
+			BulletedListItem: &notion.ListItemBlock{
+				RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Parent"}}},
+			},
+			HasChildren: true,
+		},
+	}
+
+	result, err := ConvertBlocksToMarkdown(blocks, ctx)
+	if err != nil {
+		t.Fatalf("ConvertBlocksToMarkdown: %v", err)
+	}
+	expected := "- Parent\n    - Child A\n    - Child B"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+}
+
+func TestConvertBlocksToMarkdown_ToggleWithChildren(t *testing.T) {
+	mock := &mockBlockFetcher{
+		blocks: map[string][]notion.Block{
+			"toggle-1": {
+				{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
+					RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Hidden content"}}},
+				}},
+			},
+		},
+	}
+	ctx := &ConvertContext{Client: mock, IndentLevel: 0}
+
+	blocks := []notion.Block{
+		{
+			ID:   "toggle-1",
+			Type: "toggle",
+			Toggle: &notion.ToggleBlock{
+				RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Click to expand"}}},
+			},
+			HasChildren: true,
+		},
+	}
+
+	result, err := ConvertBlocksToMarkdown(blocks, ctx)
+	if err != nil {
+		t.Fatalf("ConvertBlocksToMarkdown: %v", err)
+	}
+	expected := "> [!note]+ Click to expand\n> \n> Hidden content"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+}
+
+func TestConvertBlocksToMarkdown_CalloutWithChildren(t *testing.T) {
+	mock := &mockBlockFetcher{
+		blocks: map[string][]notion.Block{
+			"callout-1": {
+				{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
+					RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "More details"}}},
+				}},
+			},
+		},
+	}
+	ctx := &ConvertContext{Client: mock, IndentLevel: 0}
+
+	blocks := []notion.Block{
+		{
+			ID:   "callout-1",
+			Type: "callout",
+			Callout: &notion.CalloutBlock{
+				RichText: []notion.RichText{{Type: "text", Text: &notion.TextContent{Content: "Warning!"}}},
+				Icon:     &notion.Icon{Type: "emoji", Emoji: "⚠️"},
+			},
+			HasChildren: true,
+		},
+	}
+
+	result, err := ConvertBlocksToMarkdown(blocks, ctx)
+	if err != nil {
+		t.Fatalf("ConvertBlocksToMarkdown: %v", err)
+	}
+	expected := "> [!warning]\n> Warning!\n> More details"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+}
+
+func TestConvertBlocksToMarkdown_Table(t *testing.T) {
+	mock := &mockBlockFetcher{
+		blocks: map[string][]notion.Block{
+			"table-1": {
+				{Type: "table_row", TableRow: &notion.TableRowBlock{
+					Cells: [][]notion.RichText{
+						{{Type: "text", PlainText: "Header 1", Text: &notion.TextContent{Content: "Header 1"}}},
+						{{Type: "text", PlainText: "Header 2", Text: &notion.TextContent{Content: "Header 2"}}},
+					},
+				}},
+				{Type: "table_row", TableRow: &notion.TableRowBlock{
+					Cells: [][]notion.RichText{
+						{{Type: "text", PlainText: "Cell 1", Text: &notion.TextContent{Content: "Cell 1"}}},
+						{{Type: "text", PlainText: "Cell 2", Text: &notion.TextContent{Content: "Cell 2"}}},
+					},
+				}},
+			},
+		},
+	}
+	ctx := &ConvertContext{Client: mock, IndentLevel: 0}
+
+	blocks := []notion.Block{
+		{
+			ID:          "table-1",
+			Type:        "table",
+			Table:       &notion.TableBlock{TableWidth: 2},
+			HasChildren: true,
+		},
+	}
+
+	result, err := ConvertBlocksToMarkdown(blocks, ctx)
+	if err != nil {
+		t.Fatalf("ConvertBlocksToMarkdown: %v", err)
+	}
+	expected := "| Header 1 | Header 2 |\n| --- | --- |\n| Cell 1 | Cell 2 |"
+	if result != expected {
+		t.Errorf("got %q, want %q", result, expected)
+	}
+}
+
 func strPtr(s string) *string {
 	return &s
 }
