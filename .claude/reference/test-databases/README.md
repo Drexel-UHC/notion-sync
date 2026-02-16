@@ -24,7 +24,9 @@ Reference databases used for integration testing of `notion-sync`.
 
 ### Double Data Source
 - Multi-data-source database import (subfolder-per-source layout)
-- Independent schemas across data sources
+- Independent schemas across data sources ("Projects" and "Clients")
+- Cross-source relation property (Projects.Client → Clients pages)
 - Per-source `_database.json` metadata with `dataSourceId`
 - Top-level refresh delegating to sub-source folders
-- 2 data sources, 3 pages each (6 total)
+- Edge cases: null properties, special chars in titles, unicode, long filenames, duplicate names across sources, negative numbers, empty content
+- 2 data sources, 13 pages total (7 Projects + 6 Clients)
