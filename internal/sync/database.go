@@ -73,9 +73,6 @@ func resolveDataSources(client *notion.Client, database *notion.Database, dbTitl
 	if len(database.DataSources) == 1 {
 		// Single data source — flat layout (no subfolder), same as before
 		ds := database.DataSources[0]
-		if _, err := client.GetDataSource(ds.ID); err != nil {
-			return nil, fmt.Errorf("verify data source access: %w", err)
-		}
 		return []dataSourceInfo{{
 			ID:         ds.ID,
 			Title:      dbTitle,
@@ -153,7 +150,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		if err != nil {
 			return nil, fmt.Errorf("query entries: %w", err)
 		}
-		importEntries(opts.Client, entries, folderPath, opts.DatabaseID, "", mode, sqlStore, result, dbTitle, onProgress)
+		importEntries(opts.Client, entries, folderPath, opts.DatabaseID, mode, sqlStore, result, dbTitle, onProgress)
 	} else {
 		// Data sources API — import each source
 		for _, src := range sources {
@@ -164,7 +161,8 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 			if err != nil {
 				return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
 			}
-			importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, src.ID, mode, sqlStore, result, src.Title, onProgress)
+			countBefore := result.Total
+			importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress)
 
 			// Write per-source metadata for multi-source databases
 			if len(sources) > 1 {
@@ -175,7 +173,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 					URL:          database.URL,
 					FolderPath:   src.FolderPath,
 					LastSyncedAt: time.Now().UTC().Format(time.RFC3339),
-					EntryCount:   0, // updated below
+					EntryCount:   result.Total - countBefore,
 				}
 				if err := WriteDatabaseMetadata(src.FolderPath, srcMeta); err != nil {
 					return nil, fmt.Errorf("write metadata for %s: %w", src.Title, err)
@@ -211,7 +209,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 func importEntries(
 	client *notion.Client,
 	entries []notion.Page,
-	folderPath, databaseID, dataSourceID string,
+	folderPath, databaseID string,
 	mode OutputMode,
 	sqlStore *store.Store,
 	result *DatabaseFreezeResult,
@@ -271,6 +269,16 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	}
 
 	databaseID := metadata.DatabaseID
+
+	// Multi-source detection: if top-level metadata has no dataSourceId,
+	// check if subfolders have their own _database.json with dataSourceId.
+	// If so, refresh each subfolder independently.
+	if metadata.DataSourceID == "" {
+		subSources := findSubSourceFolders(opts.FolderPath)
+		if len(subSources) > 0 {
+			return refreshMultiSource(opts, subSources, metadata, onProgress)
+		}
+	}
 
 	// Open SQLite store at workspace root (parent of database folder)
 	mode := resolveOutputMode(opts.OutputMode)
@@ -578,6 +586,67 @@ func timestampsEqual(a, b string) bool {
 		return false
 	}
 	return ta.Equal(tb)
+}
+
+// findSubSourceFolders scans for subfolders with _database.json that have a dataSourceId.
+func findSubSourceFolders(folderPath string) []string {
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil
+	}
+	var folders []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		subPath := filepath.Join(folderPath, entry.Name())
+		meta, err := ReadDatabaseMetadata(subPath)
+		if err != nil || meta == nil {
+			continue
+		}
+		if meta.DataSourceID != "" {
+			folders = append(folders, subPath)
+		}
+	}
+	return folders
+}
+
+// refreshMultiSource refreshes each sub-source folder independently and aggregates results.
+func refreshMultiSource(opts RefreshOptions, subFolders []string, parentMeta *FrozenDatabase, onProgress ProgressCallback) (*DatabaseFreezeResult, error) {
+	result := &DatabaseFreezeResult{
+		Title:      parentMeta.Title,
+		FolderPath: opts.FolderPath,
+	}
+
+	for _, subFolder := range subFolders {
+		subOpts := RefreshOptions{
+			Client:     opts.Client,
+			FolderPath: subFolder,
+			Force:      opts.Force,
+			PageIDs:    opts.PageIDs,
+			OutputMode: opts.OutputMode,
+		}
+		subResult, err := RefreshDatabase(subOpts, onProgress)
+		if err != nil {
+			return nil, fmt.Errorf("refresh %s: %w", filepath.Base(subFolder), err)
+		}
+		result.Total += subResult.Total
+		result.Created += subResult.Created
+		result.Updated += subResult.Updated
+		result.Skipped += subResult.Skipped
+		result.Deleted += subResult.Deleted
+		result.Failed += subResult.Failed
+		result.Errors = append(result.Errors, subResult.Errors...)
+	}
+
+	// Update top-level metadata timestamp
+	parentMeta.LastSyncedAt = time.Now().UTC().Format(time.RFC3339)
+	parentMeta.EntryCount = result.Total
+	if err := WriteDatabaseMetadata(opts.FolderPath, parentMeta); err != nil {
+		return nil, fmt.Errorf("write metadata: %w", err)
+	}
+
+	return result, nil
 }
 
 func markAsDeleted(filePath string) error {
