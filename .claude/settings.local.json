@@ -7,7 +7,8 @@
       "mcp__notion__notion-create-pages",
       "mcp__notion__notion-update-page",
       "mcp__context7__resolve-library-id",
-      "mcp__context7__query-docs"
+      "mcp__context7__query-docs",
+      "mcp__notion__notion-create-database"
     ]
   }
 }
