@@ -373,20 +373,33 @@ Exit codes: `0` success, `1` error
 
 ## Testing
 
+Three tiers — unit/integration run offline, system tests hit real Notion API.
+
 ```sh
-go test ./...                           # all tests
-go test ./internal/markdown/            # just converter tests
-go test -v ./internal/notion/           # verbose client tests
-go test -run TestConvertBlocksToMarkdown ./internal/markdown/  # specific test
+# Unit + integration (mock client, no API needed)
+go test ./...
+
+# System tests (real Notion API, require API key)
+/test-single-datasource-db
+/test-double-datasource-db
+
+# Everything together
+/test
 ```
 
-Tests don't require Notion API access — they test pure conversion logic.
+For detailed coverage map and architecture, see `.claude/reference/testing/README.md`.
+
+### Key interfaces for testing
+
+- `sync.NotionClient` — interface in `sync/client.go`, mocked in `sync/mock_client_test.go`
+- `markdown.BlockFetcher` — interface in `markdown/converter.go`, mocked in `converter_test.go`
 
 ### Test Databases
 
-| Name                                | Database ID                            | Reference                                        |
-| ----------------------------------- | -------------------------------------- | ------------------------------------------------ |
-| Complex (Property & Block Coverage) | `2fe57008-e885-8003-b1f3-cc05981dc6b0` | `.claude/reference/v0.1/test-databases/complex/` |
+| Name | Database ID | Skill |
+| ---- | ----------- | ----- |
+| Single data source (complex) | `2fe57008-e885-8003-b1f3-cc05981dc6b0` | `/test-single-datasource-db` |
+| Double data source | `c9aa5ab2-b470-429c-ba9c-86c853782bb2` | `/test-double-datasource-db` |
 
 ---
 

@@ -1,24 +1,6 @@
-# Testing Protocol
+# Testing Framework
 
-## Current Coverage
-
-| Layer | Files | Tests | What's Covered |
-|-------|-------|-------|---------------|
-| Unit: markdown | `converter_test.go` | ~30 | Block→MD conversion (28 block types), rich text (24 variants) |
-| Unit: frontmatter | `frontmatter_test.go` | ~16 | YAML parse, body extraction, string escaping |
-| Unit: notion | `client_test.go` | 9 | `NormalizeNotionID` (hex, UUID, URL, errors) |
-| Unit: util | `path_test.go` | ~8 | `SanitizeFileName`, `JoinPath` |
-| Unit: sync/page | `page_test.go` | ~12 | `mapPropertiesToFrontmatter` (17 property types), `getPageTitle` |
-| Unit: sync/database | `database_test.go` | ~12 | `scanLocalFiles`, `markAsDeleted`, `timestampsEqual` |
-| Unit: sync/metadata | `metadata_test.go` | 5 | `_database.json` read/write/list |
-| Unit: store | `store_test.go` | 22 | SQLite CRUD, FTS, triggers, reopen, special chars, multi-DB |
-| System: single-source | Claude skill | 13 steps | Full CLI lifecycle (import→refresh→ids→force→verify→SQLite) |
-| System: double-source | Claude skill | 15 steps | Multi-source layout, SQLite, edge cases |
-| **Total** | **8 test files + 2 skills** | **178 unit + 28 system steps** | |
-
----
-
-## Architecture
+## Test Pyramid
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -26,88 +8,140 @@
 │              (Claude skills, real Notion API)            │
 │                                                         │
 │  /test-single-datasource-db  /test-double-datasource-db │
-│  - import, refresh, --ids    - subfolder layout         │
-│  - --force, mtime, props     - SQLite, edge cases       │
-│  - incremental sync, SQLite  - cross-source relations   │
-│  - scoped cleanup per DB     - scoped cleanup per DB    │
+│  - import → refresh → --ids  - multi-source subfolders  │
+│  - --force, mtime, props     - cross-source relations   │
+│  - SQLite verification       - edge cases (nulls, 0,    │
+│  - scoped cleanup per DB       unicode, negative nums)  │
 │                                                         │
 │  Catches: API contract changes, CLI regressions,        │
 │           end-to-end data flow                          │
 ├─────────────────────────────────────────────────────────┤
-│                                                         │
 │                 INTEGRATION TESTS                       │
-│              (mocked client, real filesystem)            │
+│          (mock NotionClient, real filesystem)            │
 │                                                         │
-│              ┌─────────────────────────┐                │
-│              │     ⚠ MISSING GAP ⚠     │                │
-│              │                         │                │
-│              │  • resolveDataSources() │                │
-│              │  • refreshMultiSource() │                │
-│              │  • deletion detection   │                │
-│              │  • importEntries() flow │                │
-│              │  • --output-mode paths  │                │
-│              │  • config key priority  │                │
-│              └─────────────────────────┘                │
+│  sync/database_integration_test.go                      │
+│  - resolveDataSources (single/multi/zero/fallback)      │
+│  - deletion detection (notion-deleted: true)            │
+│  - refreshMultiSource aggregation                       │
+│  - output mode: markdown-only, sqlite-only, both        │
 │                                                         │
-│  Would catch: orchestration bugs, multi-source logic,   │
-│               deletion edge cases — without Notion API   │
+│  Catches: orchestration bugs, multi-source logic,       │
+│           deletion edge cases — without Notion API       │
 ├─────────────────────────────────────────────────────────┤
 │                     UNIT TESTS                          │
 │              (pure functions, no I/O)                    │
 │                                                         │
 │  markdown/       frontmatter/     notion/               │
 │  converter ✅    parse ✅         NormalizeID ✅        │
-│  richtext ✅     writer ✅                              │
+│  richtext ✅     writer ✅        config/ ✅            │
+│  nested blocks ✅ round-trip ✅                          │
 │                                                         │
 │  sync/           store/           util/                 │
-│  page ✅         SQLite CRUD ✅   SanitizeFileName ✅   │
+│  page props ✅   SQLite CRUD ✅   SanitizeFileName ✅   │
 │  database ✅     FTS ✅           JoinPath ✅           │
-│  metadata ✅     triggers ✅                            │
+│  metadata ✅     triggers ✅      cmd/main ✅           │
 │                                                         │
 │  Catches: conversion bugs, YAML edge cases,             │
-│           property mapping, filename sanitization        │
-├─────────────────────────────────────────────────────────┤
-│                   TOOLS & NOT TESTED                    │
-│                                                         │
-│  sqlite3 CLI — read-only inspection of _notion_sync.db  │
-│  (used in system test skills; never write directly)     │
-│                                                         │
-│  cmd/notion-sync/main.go  — CLI flag parsing, routing   │
-│  internal/config/         — API key priority chain      │
+│           property mapping, filename sanitization,       │
+│           CLI flag parsing, config key priority          │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Proposed Testing Enhancements
+## How to Run
 
-| Priority | Test | Level | Changes Prod Code? | Risk | Effort |
-|----------|------|-------|--------------------|------|--------|
-| P0 | `findSubSourceFolders()` — subfolder detection with/without `dataSourceId` in metadata | Unit | No | Zero | 30 min |
-| P0 | `resolveDataSources()` — mock client, test single/multi/zero source paths | Integration | Yes (extract `NotionClient` interface) | Very low | 1-2 hr |
-| P0 | Deletion detection — mock client returning fewer pages than local files, verify `notion-deleted: true` | Integration | Yes (same interface) | Very low | 1 hr |
-| P1 | Frontmatter round-trip — write then read, assert equality for negative numbers, colons, unicode, empty arrays, null | Unit | No | Zero | 30 min |
-| P1 | `refreshMultiSource()` aggregation — verify totals sum correctly, errors propagate | Integration | No (mock sub-folders on disk) | Zero | 30 min |
-| P1 | Deletion step in system skills — create temp page, import, delete in Notion, refresh, verify soft delete | System | No (skill file only) | Zero | 15 min |
-| P2 | `--output-mode sqlite` / `--output-mode markdown` — verify only expected outputs produced | System | No (skill file only) | Zero | 15 min |
-| P2 | Config key priority — test flag > env > keyring > file precedence | Unit | Maybe (env var access pattern) | Very low | 30 min |
-| P2 | Nested block conversion — indented lists, toggle children, callout with child blocks | Unit | No | Zero | 30 min |
-| P3 | CLI flag parsing — valid flags, missing required args, unknown flags, exit codes | Unit | No (test via `exec.Command`) | Zero | 30 min |
-| P3 | Boundary number serialization — negative, zero, very large, `Inf`, `NaN` in frontmatter writer | Unit | No | Zero | 15 min |
+### Unit + Integration (no API key needed)
 
-### Summary
+```sh
+go test ./...                    # all packages
+go test ./internal/sync/         # just sync tests
+go test -run TestRefresh ./internal/sync/  # specific test
+go test -v ./...                 # verbose output
+```
 
-- **P0 (3 items):** Fill the integration test gap for multi-data-source orchestration and deletion. One requires extracting a `NotionClient` interface (safe, additive refactor).
-- **P1 (3 items):** Harden data integrity (frontmatter round-trip, aggregation math, deletion E2E).
-- **P2 (3 items):** Cover output modes, config, and nested blocks.
-- **P3 (2 items):** Polish — CLI parsing and number edge cases.
+### System Tests (require Notion API key)
 
-~85% of items are pure test additions (zero risk). ~15% require a small production refactor (extract interface).
+```sh
+/test-single-datasource-db              # single data source lifecycle
+/test-single-datasource-db --verbose    # step-by-step with confirmation
+/test-single-datasource-db --no-cleanup # keep test-output/ for inspection
+
+/test-double-datasource-db              # multi-source layout + edge cases
+/test-double-datasource-db --verbose
+```
+
+### Everything Together
+
+```sh
+/test                      # unit → single-source → double-source (sequential)
+/test --skip-unit          # system tests only
+/test --skip-system        # unit/integration only
+/test --verbose            # verbose passed to system tests
+```
 
 ---
 
-## Recent Changes
+## Coverage by Package
 
-- **v1 API removed:** `QueryDatabase`/`QueryAllEntriesFromDatabase` deleted. All queries now go through `/data_sources/{id}/query` (v2 API). No legacy fallback paths to test.
-- **SQLite verification:** Added to single-datasource skill (Step 10) — checks page count, body_markdown, timestamps, FTS index.
-- **Scoped cleanup:** Both skills now only delete their own subfolder + clean their rows from SQLite by `database_id`. No more nuking the entire `test-output/` directory.
+| Package | Test File(s) | Tests | What's Covered |
+|---------|-------------|-------|---------------|
+| cmd/notion-sync | `main_test.go` | 12 | `reorderArgs` (9 cases), CLI exit codes, --version |
+| internal/config | `config_test.go` | 5 | env > file priority, defaults, XDG path, outputMode |
+| internal/frontmatter | `frontmatter_test.go` | ~30 | Parse, GetBody, round-trip (negatives, unicode, booleans, timestamps), yamlEscapeString, boundary numbers |
+| internal/markdown | `converter_test.go` | ~35 | 28 block types, rich text (24 variants), nested blocks with mock BlockFetcher (lists, toggles, callouts, tables) |
+| internal/notion | `client_test.go` | 9 | NormalizeNotionID (hex, UUID, URL, errors) |
+| internal/store | `store_test.go` | 22 | SQLite CRUD, FTS, triggers, reopen, special chars, multi-DB |
+| internal/sync | `database_test.go` | ~16 | scanLocalFiles, markAsDeleted, timestampsEqual, findSubSourceFolders |
+| internal/sync | `database_integration_test.go` | ~10 | resolveDataSources, deletion detection, refreshMultiSource, output modes |
+| internal/sync | `page_test.go` | ~12 | mapPropertiesToFrontmatter (17 property types), getPageTitle |
+| internal/sync | `metadata_test.go` | 5 | _database.json read/write/list |
+| internal/util | `path_test.go` | ~8 | SanitizeFileName, JoinPath |
+| **System** | 2 Claude skills | 28 steps | Full CLI lifecycle against real Notion API |
+| **Total** | **12 test files + 2 skills** | **~236 unit/integration + 28 system steps** | |
+
+---
+
+## Key Test Infrastructure
+
+### Interfaces (prod code, enable mocking)
+
+- **`sync.NotionClient`** (`internal/sync/client.go`) — 5 methods: GetDatabase, GetDataSource, QueryAllEntries, GetPage, FetchAllBlocks
+- **`markdown.BlockFetcher`** (`internal/markdown/converter.go`) — 1 method: FetchAllBlocks
+
+### Mocks (test-only)
+
+- **`mockNotionClient`** (`internal/sync/mock_client_test.go`) — map-based, returns pre-configured data by ID
+- **`mockBlockFetcher`** (`internal/markdown/converter_test.go`) — returns pre-configured blocks for testing nested conversion
+- **`testPage()`** helper — creates a minimal `notion.Page` with title and timestamp
+
+### Test Databases (real Notion)
+
+| Name | Database ID | Skill | Pages |
+|------|-------------|-------|-------|
+| Single data source (complex) | `2fe57008-e885-8003-b1f3-cc05981dc6b0` | `/test-single-datasource-db` | 11 |
+| Double data source | `c9aa5ab2-b470-429c-ba9c-86c853782bb2` | `/test-double-datasource-db` | ~14 |
+
+---
+
+## Adding Tests
+
+### New unit test for a sync function
+
+1. If the function calls `NotionClient` methods, use `mockNotionClient` from `mock_client_test.go`
+2. Use `t.TempDir()` for filesystem operations
+3. Use `WriteDatabaseMetadata()` to set up `_database.json` fixtures
+4. Run: `go test -v ./internal/sync/ -run TestYourTest`
+
+### New block conversion test with children
+
+1. Create a `mockBlockFetcher` with the child blocks keyed by parent block ID
+2. Pass it via `ConvertContext{Client: mock}`
+3. Set `HasChildren: true` on parent blocks
+4. See `TestConvertBlocksToMarkdown_NestedBulletedList` for example
+
+### New system test step
+
+1. Edit the relevant skill in `.claude/skills/test-*-datasource-db/SKILL.md`
+2. Add step with pass criteria
+3. Test with: `/test-single-datasource-db --verbose`

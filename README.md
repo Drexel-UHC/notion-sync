@@ -125,8 +125,21 @@ internal/
 ## Development
 
 ```sh
-go test ./...                # Run tests
 go build ./cmd/notion-sync   # Build binary
+```
+
+### Testing
+
+```sh
+# Unit + integration tests (mock client, no API needed)
+go test ./...
+
+# System tests (hit real Notion API, require API key)
+/test-single-datasource-db        # single data source lifecycle
+/test-double-datasource-db        # multi-source layout + edge cases
+
+# Everything together (unit → single → double, sequential)
+/test
 ```
 
 ## Documentation
