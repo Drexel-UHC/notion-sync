@@ -8,9 +8,15 @@ import (
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
+// BlockFetcher abstracts the ability to fetch child blocks.
+// *notion.Client satisfies this interface. Tests can provide a mock.
+type BlockFetcher interface {
+	FetchAllBlocks(blockID string) ([]notion.Block, error)
+}
+
 // ConvertContext holds context for block conversion.
 type ConvertContext struct {
-	Client      *notion.Client
+	Client      BlockFetcher
 	IndentLevel int
 }
 
