@@ -25,26 +25,50 @@ scoop install notion-sync
 
 Download the binary for your platform from [GitHub Releases](https://github.com/ran-codes/notion-sync/releases), rename it to `notion-sync` (or `notion-sync.exe` on Windows), and add it to your PATH.
 
-### Usage
+## Usage
 
 ```sh
 # Store your API key (saved in OS keychain)
 notion-sync config set apiKey <your-notion-api-key>
 
-# Import a database (use the database ID — see "Finding your database ID" below)
-notion-sync import abc123de-f456-7890-abcd-ef1234567890 --out ./my-notes
+# Import databases into an output folder
+notion-sync import <database-id-A> --output ./my-notes
+notion-sync import <database-id-B> --output ./my-notes
 
-# Refresh (incremental update)
-notion-sync refresh ./my-notes/MyDatabase
+# Refresh (incremental — only changed entries)
+notion-sync refresh ./my-notes/Database\ A
 
-# Force refresh (resync all entries)
-notion-sync refresh ./my-notes/MyDatabase --force
+# Force refresh (resync everything)
+notion-sync refresh ./my-notes/Database\ A --force
 
 # List synced databases
 notion-sync list ./my-notes
 ```
 
-The `--out` folder can be any directory — notion-sync creates a subfolder inside it named after the database.
+The `--output` folder is a **workspace**. Each database gets a subfolder, and all databases in a workspace share a single SQLite store:
+
+```
+my-notes/                        ← workspace (--output target)
+├── _notion_sync.db              ← shared SQLite store (FTS5 search, all pages)
+├── Database A/
+│   ├── _database.json
+│   ├── Page One.md
+│   └── Page Two.md
+└── Database B/
+    ├── _database.json
+    ├── Entry Alpha.md
+    └── Entry Beta.md
+```
+
+By default both `.md` files and SQLite are written. Use `--output-mode` to control this:
+
+```sh
+notion-sync import <id> --output ./notes --output-mode markdown  # .md only
+notion-sync import <id> --output ./notes --output-mode sqlite    # SQLite only
+notion-sync import <id> --output ./notes --output-mode both      # default
+```
+
+You can also set the default in config: `notion-sync config set outputMode sqlite`
 
 ## Prerequisites
 
@@ -121,10 +145,11 @@ See [CLAUDE.md](CLAUDE.md) for implementation details, how to add block/property
 
 ## Dependencies
 
-| Package                         | Used for           |
-| ------------------------------- | ------------------ |
-| `github.com/zalando/go-keyring` | OS keychain access |
-| `gopkg.in/yaml.v3`              | YAML parsing       |
+| Package                         | Used for                       |
+| ------------------------------- | ------------------------------ |
+| `github.com/zalando/go-keyring` | OS keychain access             |
+| `gopkg.in/yaml.v3`              | YAML parsing                   |
+| `modernc.org/sqlite`            | Pure-Go SQLite (FTS5, no CGO)  |
 
 No third-party Notion client — uses a thin REST wrapper for full control over rate limiting.
 
