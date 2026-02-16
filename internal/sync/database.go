@@ -66,8 +66,7 @@ type dataSourceInfo struct {
 // Single-source databases stay flat; multi-source databases get subfolders.
 func resolveDataSources(client *notion.Client, database *notion.Database, dbTitle, baseFolderPath string) ([]dataSourceInfo, error) {
 	if len(database.DataSources) == 0 {
-		// Legacy database — no data sources, use classic query endpoint (handled by caller)
-		return nil, nil
+		return nil, fmt.Errorf("database has no data sources; ensure you are using Notion API version 2025-09-03 or later")
 	}
 
 	if len(database.DataSources) == 1 {
@@ -144,40 +143,31 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		FolderPath: folderPath,
 	}
 
-	if sources == nil {
-		// Legacy database — use classic query endpoint
-		entries, err := opts.Client.QueryAllEntriesFromDatabase(opts.DatabaseID)
-		if err != nil {
-			return nil, fmt.Errorf("query entries: %w", err)
+	// Import each data source
+	for _, src := range sources {
+		if err := os.MkdirAll(src.FolderPath, 0755); err != nil {
+			return nil, fmt.Errorf("create folder %s: %w", src.FolderPath, err)
 		}
-		importEntries(opts.Client, entries, folderPath, opts.DatabaseID, mode, sqlStore, result, dbTitle, onProgress)
-	} else {
-		// Data sources API — import each source
-		for _, src := range sources {
-			if err := os.MkdirAll(src.FolderPath, 0755); err != nil {
-				return nil, fmt.Errorf("create folder %s: %w", src.FolderPath, err)
-			}
-			entries, err := opts.Client.QueryAllEntries(src.ID)
-			if err != nil {
-				return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
-			}
-			countBefore := result.Total
-			importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress)
+		entries, err := opts.Client.QueryAllEntries(src.ID)
+		if err != nil {
+			return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
+		}
+		countBefore := result.Total
+		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress)
 
-			// Write per-source metadata for multi-source databases
-			if len(sources) > 1 {
-				srcMeta := &FrozenDatabase{
-					DatabaseID:   opts.DatabaseID,
-					DataSourceID: src.ID,
-					Title:        src.Title,
-					URL:          database.URL,
-					FolderPath:   src.FolderPath,
-					LastSyncedAt: time.Now().UTC().Format(time.RFC3339),
-					EntryCount:   result.Total - countBefore,
-				}
-				if err := WriteDatabaseMetadata(src.FolderPath, srcMeta); err != nil {
-					return nil, fmt.Errorf("write metadata for %s: %w", src.Title, err)
-				}
+		// Write per-source metadata for multi-source databases
+		if len(sources) > 1 {
+			srcMeta := &FrozenDatabase{
+				DatabaseID:   opts.DatabaseID,
+				DataSourceID: src.ID,
+				Title:        src.Title,
+				URL:          database.URL,
+				FolderPath:   src.FolderPath,
+				LastSyncedAt: time.Now().UTC().Format(time.RFC3339),
+				EntryCount:   result.Total - countBefore,
+			}
+			if err := WriteDatabaseMetadata(src.FolderPath, srcMeta); err != nil {
+				return nil, fmt.Errorf("write metadata for %s: %w", src.Title, err)
 			}
 		}
 	}
@@ -363,20 +353,17 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	}
 
 	// Determine which data source to query.
-	// Prefer stored dataSourceId from metadata; fall back to database lookup; fall back to classic endpoint.
-	var entries []notion.Page
 	dataSourceID := metadata.DataSourceID
 	if dataSourceID == "" && len(database.DataSources) > 0 {
 		dataSourceID = database.DataSources[0].ID
 	}
-	if dataSourceID != "" {
-		if _, err := opts.Client.GetDataSource(dataSourceID); err != nil {
-			return nil, fmt.Errorf("verify data source access: %w", err)
-		}
-		entries, err = opts.Client.QueryAllEntries(dataSourceID)
-	} else {
-		entries, err = opts.Client.QueryAllEntriesFromDatabase(databaseID)
+	if dataSourceID == "" {
+		return nil, fmt.Errorf("database has no data sources; ensure you are using Notion API version 2025-09-03 or later")
 	}
+	if _, err := opts.Client.GetDataSource(dataSourceID); err != nil {
+		return nil, fmt.Errorf("verify data source access: %w", err)
+	}
+	entries, err := opts.Client.QueryAllEntries(dataSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("query entries: %w", err)
 	}

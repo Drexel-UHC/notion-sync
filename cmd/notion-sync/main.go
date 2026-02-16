@@ -14,6 +14,8 @@ import (
 // version is set at build time via -ldflags.
 var version = "dev"
 
+// 0. Arg Parsing & Usage ----
+
 // boolFlags lists flags that don't take a value argument.
 var boolFlags = map[string]bool{
 	"--force": true, "-f": true,
@@ -78,6 +80,8 @@ API Key Priority:
   3. Config file fallback (~/.notion-sync.json)
 `
 
+// 1. Entry Point ----
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Print(usage)
@@ -121,6 +125,10 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// 2. Commands ----
+
+//// 2.1 Import ----
 
 func runImport(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
@@ -215,6 +223,8 @@ func runImport(args []string) error {
 
 	return nil
 }
+
+//// 2.2 Refresh ----
 
 func runRefresh(args []string) error {
 	fs := flag.NewFlagSet("refresh", flag.ExitOnError)
@@ -318,6 +328,8 @@ func runRefresh(args []string) error {
 	return nil
 }
 
+//// 2.3 List ----
+
 func runList(args []string) error {
 	outputFolder := "./notion"
 	if len(args) > 0 {
@@ -346,6 +358,8 @@ func runList(args []string) error {
 
 	return nil
 }
+
+//// 2.4 Config ----
 
 func runConfig(args []string) error {
 	if len(args) < 3 || args[0] != "set" {
@@ -376,6 +390,8 @@ func runConfig(args []string) error {
 	fmt.Printf("Saved %s\n", key)
 	return nil
 }
+
+// 3. Helpers ----
 
 // resolveOutputModeFlag resolves the output mode from flag > config > default.
 func resolveOutputModeFlag(flagValue string, cfg config.Config) (sync.OutputMode, error) {
