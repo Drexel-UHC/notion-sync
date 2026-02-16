@@ -1,13 +1,13 @@
 ---
 name: test
-description: Run all tests — unit tests, then system integration tests against real Notion databases
-version: 1.0.0
+description: Run all tests — unit, system, cross-integration SQLite consistency, then cleanup
+version: 2.0.0
 args: "[--verbose] [--no-cleanup] [--skip-unit] [--skip-system]"
 ---
 
 # Unified Test Runner
 
-Run all test suites sequentially. API rate limits prevent concurrent Notion calls, so system tests run one at a time.
+Run all test suites sequentially. Both system tests leave their output on disk so Step 4 can cross-validate the shared SQLite store against all markdown files, then Step 5 cleans up.
 
 ## Flags
 
@@ -16,49 +16,118 @@ Parse the skill args for these flags:
 | Flag | Effect |
 |------|--------|
 | `--verbose` | Pass through to system test skills |
-| `--no-cleanup` | Pass through to system test skills |
+| `--no-cleanup` | Skip Step 5 (final cleanup) — leave `test-output/` on disk |
 | `--skip-unit` | Skip Step 1 (Go unit tests) |
-| `--skip-system` | Skip Steps 2 and 3 (system integration tests) |
+| `--skip-system` | Skip Steps 2–4 (system + cross-integration) |
 
 ## Steps
 
-### Step 1: Unit Tests
+### Step 1: Unit + Integration Tests
 
 **Skip if `--skip-unit` was passed.**
 
 Run: `go test ./... -count=1`
 
 - **Pass criteria:** exit code 0, all tests pass.
-- Print summary: `Step 1: Unit tests — X packages, Y tests, PASS/FAIL`
+- Print: `Step 1: Unit tests — X packages, PASS/FAIL`
 
 ### Step 2: Single Data Source System Test
 
 **Skip if `--skip-system` was passed.**
 
-Invoke the `/test-single-datasource-db` skill, passing through `--verbose` and `--no-cleanup` flags if present.
+Invoke `/test-single-datasource-db --no-cleanup`, also passing `--verbose` if present.
+
+The `--no-cleanup` is **always** passed here regardless of user flags — we need the files on disk for Step 4.
 
 - **Pass criteria:** Skill reports `ALL TESTS PASSED`.
-- Print summary: `Step 2: Single datasource — PASS/FAIL`
+- Print: `Step 2: Single datasource — PASS/FAIL`
 
 ### Step 3: Double Data Source System Test
 
 **Skip if `--skip-system` was passed.**
 
-Invoke the `/test-double-datasource-db` skill, passing through `--verbose` and `--no-cleanup` flags if present.
+Invoke `/test-double-datasource-db --no-cleanup`, also passing `--verbose` if present.
+
+Same as Step 2 — `--no-cleanup` always passed to keep files for Step 4.
 
 - **Pass criteria:** Skill reports `ALL TESTS PASSED`.
-- Print summary: `Step 3: Double datasource — PASS/FAIL`
+- Print: `Step 3: Double datasource — PASS/FAIL`
+
+### Step 4: Cross-Integration — SQLite ↔ Markdown Consistency
+
+**Skip if `--skip-system` was passed.**
+
+This validates that the shared `_notion_sync.db` at `test-output/` is consistent with all the markdown files produced by both system tests.
+
+Run these checks using `sqlite3` (read-only) and filesystem inspection:
+
+#### 4a. SQLite has pages from both databases
+
+```sql
+SELECT database_id, COUNT(*) FROM pages WHERE deleted = 0 GROUP BY database_id;
+```
+
+- **Pass criteria:** Two distinct `database_id` values are present:
+  - `2fe57008-e885-8003-b1f3-cc05981dc6b0` (single-source) with 11 pages
+  - `c9aa5ab2-b470-429c-ba9c-86c853782bb2` (double-source) with >= 13 pages
+
+#### 4b. Every non-deleted SQLite page has a matching .md file
+
+For each row in `pages` where `deleted = 0` and `file_path` is not empty:
+- Verify the file at `file_path` exists on disk.
+
+- **Pass criteria:** All file paths resolve to existing files.
+
+#### 4c. Every .md file with `notion-id` has a matching SQLite row
+
+Scan all `.md` files under `test-output/` for `notion-id` in frontmatter. For each:
+- Query `SELECT id FROM pages WHERE id = '<notion-id>' AND deleted = 0`
+- Verify a row exists.
+
+- **Pass criteria:** All markdown notion-ids found in SQLite.
+
+#### 4d. Timestamps match between SQLite and frontmatter
+
+For a sample of 3 pages (pick one from single-source, two from double-source):
+- Compare `last_edited_time` in SQLite vs `notion-last-edited` in the `.md` frontmatter.
+
+- **Pass criteria:** Timestamps match (use `timestampsEqual` logic — `.000Z` vs `Z` is OK).
+
+#### 4e. FTS index covers both databases
+
+```sql
+SELECT COUNT(*) FROM pages_fts;
+```
+
+- **Pass criteria:** Count >= total non-deleted pages across both databases.
+
+Print: `Step 4: Cross-integration SQLite consistency — PASS/FAIL`
+
+### Step 5: Cleanup
+
+**Skip if `--no-cleanup` was passed.** Print `Step 5: Skipped (--no-cleanup)` and leave files.
+
+Otherwise, clean up everything:
+
+1. Delete `test-output/test database obsdiain complex/` (single-source folder)
+2. Delete `test-output/test database - double data source/` (double-source folder)
+3. Clean SQLite: delete rows from `pages` where `database_id` IN the two test database IDs. Use Python or Go to execute the SQL.
+4. If `_notion_sync.db` has zero rows remaining in `pages`, delete the `.db` file entirely.
+5. If `test-output/` is now empty, delete it.
+
+Print: `Step 5: Cleanup — done`
 
 ## Summary
 
 Print a combined results table:
 
 ```
-| Suite                    | Result |
-|--------------------------|--------|
-| Unit tests (go test)     | PASS   |
-| Single datasource system | PASS   |
-| Double datasource system | PASS   |
+| Suite                          | Result  |
+|--------------------------------|---------|
+| Unit tests (go test)           | PASS    |
+| Single datasource system       | PASS    |
+| Double datasource system       | PASS    |
+| Cross-integration (SQLite ↔ MD)| PASS    |
 ```
 
 Then:
