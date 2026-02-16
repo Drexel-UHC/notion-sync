@@ -21,7 +21,7 @@ import (
 
 const (
 	baseURL              = "https://api.notion.com/v1"
-	notionVersion        = "2022-06-28"
+	notionVersion        = "2025-09-03"
 	maxRetries           = 5
 	minRequestIntervalMs = 340 // ~3 requests per second
 	maxBackoffMs         = 30000
@@ -162,10 +162,18 @@ func (c *Client) GetDatabase(databaseID string) (*Database, error) {
 	return &db, nil
 }
 
-// GetDataSource retrieves a data source by ID (for verification).
-func (c *Client) GetDataSource(dataSourceID string) error {
-	_, err := c.request("GET", "/data_sources/"+dataSourceID, nil)
-	return err
+// GetDataSource retrieves a data source by ID.
+func (c *Client) GetDataSource(dataSourceID string) (*DataSourceDetail, error) {
+	respBody, err := c.request("GET", "/data_sources/"+dataSourceID, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var ds DataSourceDetail
+	if err := json.Unmarshal(respBody, &ds); err != nil {
+		return nil, fmt.Errorf("unmarshal data source: %w", err)
+	}
+	return &ds, nil
 }
 
 // QueryDataSource queries entries from a data source.
