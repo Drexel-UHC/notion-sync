@@ -2,7 +2,7 @@
 name: test-double-datasource-db
 description: Run integration test against the double-data-source test database (multi-source import, subfolder layout, SQLite, edge cases)
 version: 1.0.0
-args: "[--verbose]"
+args: "[--verbose] [--no-cleanup]"
 ---
 
 # Integration Test: Double Data Source Database
@@ -19,6 +19,7 @@ Check if `--verbose` was passed in the skill args.
 
 - **Default (concise):** Run all steps automatically without asking questions. Print a one-line status per step as you go (e.g., `Step 1: Build... done`). At the end, print the summary table and pass/fail result. Do NOT use `AskUserQuestion` at all.
 - **Verbose (`--verbose`):** Interactive mode. Use `AskUserQuestion` with selectable options before every command. Show exact CLI calls, wait for confirmation. Never jump ahead.
+- **No cleanup (`--no-cleanup`):** Skip Step 14 (delete `test-output/`). The test output is left on disk so you can examine it manually.
 
 ## Verbose-Only Interaction Rules
 
@@ -35,8 +36,9 @@ Run: `go build ./cmd/notion-sync`
 - **Pass criteria:** exit code 0, `notion-sync.exe` exists.
 
 ### Step 1: Clean slate
-- If `test-output/` exists: delete it (in verbose mode, ask first).
+- If `test-output/test database - double data source/` exists: delete only that subfolder (in verbose mode, ask first).
 - If it doesn't exist: skip.
+- **Important:** Do NOT delete `test-output/` itself or any other subfolders — other test databases may live there.
 
 ### Step 2: Fresh import
 Run: `./notion-sync.exe import c9aa5ab2-b470-429c-ba9c-86c853782bb2 --output ./test-output`
@@ -167,7 +169,12 @@ For each synced `.md` file in both `Projects/` and `Clients/`, compare the file'
 Use Notion MCP tools to restore the page edited in Step 9 back to its original property values and content. This keeps the test database clean for the next run.
 
 ### Step 14: Clean up
-Delete `test-output/` directory.
+If `--no-cleanup` was passed, **skip this step** and print `Step 14: Skipped (--no-cleanup)`.
+Otherwise:
+1. Delete only `test-output/test database - double data source/` (not the entire `test-output/` directory).
+2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.db` where `database_id` matches this test's database ID (`c9aa5ab2-b470-429c-ba9c-86c853782bb2`). Use Python or Go to run the SQL.
+3. If `_notion_sync.db` has zero rows remaining in `pages`, delete the `.db` file entirely.
+4. If `test-output/` is now empty, delete it.
 
 ## Done
 Summarize all step results in a table with columns: Step | Action | Result.
