@@ -441,3 +441,167 @@ func TestFreshImport_BothMode(t *testing.T) {
 		t.Error("expected _notion_sync.db to exist in both mode")
 	}
 }
+
+func TestFreshImport_DuplicateTitles(t *testing.T) {
+	dir := t.TempDir()
+	mock := newMockClient()
+	dbID := "db-dup"
+	dsID := "ds-dup"
+
+	mock.databases[dbID] = &notion.Database{
+		ID:    dbID,
+		URL:   "https://notion.so/" + dbID,
+		Title: []notion.RichText{{Type: "text", PlainText: "DupDB", Text: &notion.TextContent{Content: "DupDB"}}},
+		DataSources: []notion.DataSource{
+			{ID: dsID, Type: "default"},
+		},
+	}
+	mock.dataSources[dsID] = &notion.DataSourceDetail{ID: dsID}
+	mock.entries[dsID] = []notion.Page{
+		testPage("aaaa1111-2222-3333-4444-555566667777", "Same Name", "2025-01-01T00:00:00Z"),
+		testPage("bbbb1111-2222-3333-4444-555566667777", "Same Name", "2025-01-01T00:00:00Z"),
+		testPage("cccc1111-2222-3333-4444-555566667777", "Unique", "2025-01-01T00:00:00Z"),
+	}
+	for _, e := range mock.entries[dsID] {
+		mock.blocks[e.ID] = []notion.Block{
+			{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
+				RichText: []notion.RichText{{Type: "text", PlainText: "Body", Text: &notion.TextContent{Content: "Body"}}},
+			}},
+		}
+	}
+
+	result, err := FreshDatabaseImport(DatabaseImportOptions{
+		Client:       mock,
+		DatabaseID:   dbID,
+		OutputFolder: dir,
+		OutputMode:   OutputMarkdown,
+	}, nil)
+	if err != nil {
+		t.Fatalf("FreshDatabaseImport: %v", err)
+	}
+	if result.Created != 3 {
+		t.Errorf("Created = %d, want 3", result.Created)
+	}
+
+	dbFolder := filepath.Join(dir, "DupDB")
+
+	// "Same Name.md" should NOT exist (both pages need disambiguation)
+	if _, err := os.Stat(filepath.Join(dbFolder, "Same Name.md")); !os.IsNotExist(err) {
+		t.Error("expected 'Same Name.md' to NOT exist (should be disambiguated)")
+	}
+
+	// Both disambiguated files should exist
+	file1 := filepath.Join(dbFolder, "Same Name-aaaa111122223333444455556666777.md")
+	file2 := filepath.Join(dbFolder, "Same Name-bbbb111122223333444455556666777.md")
+
+	// Use glob since the exact dash-removal may vary
+	matches, _ := filepath.Glob(filepath.Join(dbFolder, "Same Name-*.md"))
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 'Same Name-*.md' files, got %d: %v", len(matches), matches)
+	}
+
+	// Verify both have different notion-ids
+	ids := map[string]bool{}
+	for _, f := range matches {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		fm, err := frontmatter.Parse(string(data))
+		if err != nil {
+			t.Fatalf("parse %s: %v", f, err)
+		}
+		id, ok := fm["notion-id"].(string)
+		if !ok || id == "" {
+			t.Errorf("missing notion-id in %s", f)
+		}
+		ids[id] = true
+	}
+	if len(ids) != 2 {
+		t.Errorf("expected 2 unique notion-ids, got %d", len(ids))
+	}
+
+	// "Unique.md" should exist with clean name
+	if _, err := os.Stat(filepath.Join(dbFolder, "Unique.md")); os.IsNotExist(err) {
+		t.Error("expected 'Unique.md' to exist (unique title, no disambiguation)")
+	}
+
+	_ = file1
+	_ = file2
+}
+
+func TestRefresh_DuplicateTitleRename(t *testing.T) {
+	dir := t.TempDir()
+	dbFolder := filepath.Join(dir, "TestDB")
+	os.MkdirAll(dbFolder, 0755)
+
+	mock := newMockClient()
+	dbID := "db-dup-rename"
+	dsID := "ds-dup-rename"
+
+	mock.databases[dbID] = &notion.Database{
+		ID:    dbID,
+		URL:   "https://notion.so/" + dbID,
+		Title: []notion.RichText{{Type: "text", PlainText: "TestDB", Text: &notion.TextContent{Content: "TestDB"}}},
+		DataSources: []notion.DataSource{
+			{ID: dsID, Type: "default"},
+		},
+	}
+	mock.dataSources[dsID] = &notion.DataSourceDetail{ID: dsID}
+
+	pageAID := "aaaa0000-1111-2222-3333-444455556666"
+	pageBID := "bbbb0000-1111-2222-3333-444455556666"
+
+	// Pre-existing local file: PageA.md with notion-id page-a
+	oldContent := "---\nnotion-id: " + pageAID + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nOld body\n"
+	os.WriteFile(filepath.Join(dbFolder, "PageA.md"), []byte(oldContent), 0644)
+
+	// Write _database.json
+	WriteDatabaseMetadata(dbFolder, &FrozenDatabase{
+		DatabaseID:   dbID,
+		DataSourceID: dsID,
+		Title:        "TestDB",
+		FolderPath:   dbFolder,
+	})
+
+	// Now mock returns 2 entries both titled "PageA" — triggers disambiguation
+	mock.entries[dsID] = []notion.Page{
+		testPage(pageAID, "PageA", "2025-01-02T00:00:00Z"), // newer timestamp → will be processed
+		testPage(pageBID, "PageA", "2025-01-01T00:00:00Z"),
+	}
+	mock.blocks[pageAID] = []notion.Block{
+		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
+			RichText: []notion.RichText{{Type: "text", PlainText: "Body A", Text: &notion.TextContent{Content: "Body A"}}},
+		}},
+	}
+	mock.blocks[pageBID] = []notion.Block{
+		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
+			RichText: []notion.RichText{{Type: "text", PlainText: "Body B", Text: &notion.TextContent{Content: "Body B"}}},
+		}},
+	}
+
+	result, err := RefreshDatabase(RefreshOptions{
+		Client:     mock,
+		FolderPath: dbFolder,
+		Force:      true,
+		OutputMode: OutputMarkdown,
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshDatabase: %v", err)
+	}
+
+	if result.Updated+result.Created != 2 {
+		t.Errorf("Updated+Created = %d, want 2", result.Updated+result.Created)
+	}
+
+	// Old "PageA.md" should be gone
+	if _, err := os.Stat(filepath.Join(dbFolder, "PageA.md")); !os.IsNotExist(err) {
+		t.Error("expected old 'PageA.md' to be removed")
+	}
+
+	// Two disambiguated files should exist
+	matches, _ := filepath.Glob(filepath.Join(dbFolder, "PageA-*.md"))
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 'PageA-*.md' files, got %d: %v", len(matches), matches)
+	}
+}

@@ -16,14 +16,15 @@ import (
 
 // FreezePageOptions contains options for freezing a page.
 type FreezePageOptions struct {
-	Client       NotionClient
-	NotionID     string
-	OutputFolder string
-	DatabaseID   string
-	Page         *notion.Page // Pre-fetched page (optional)
-	Force        bool         // Skip timestamp check and always re-freeze
-	SQLStore     *store.Store // SQLite store (nil = skip SQLite writes)
-	OutputMode   OutputMode   // Controls markdown vs sqlite output
+	Client           NotionClient
+	NotionID         string
+	OutputFolder     string
+	DatabaseID       string
+	Page             *notion.Page // Pre-fetched page (optional)
+	Force            bool         // Skip timestamp check and always re-freeze
+	SQLStore         *store.Store // SQLite store (nil = skip SQLite writes)
+	OutputMode       OutputMode   // Controls markdown vs sqlite output
+	OverrideFileName string       // If set, use this instead of computing from title (without .md extension)
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -39,9 +40,12 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	}
 
 	title := getPageTitle(page)
-	safeName := util.SanitizeFileName(title)
+	safeName := opts.OverrideFileName
 	if safeName == "" {
-		safeName = "Untitled"
+		safeName = util.SanitizeFileName(title)
+		if safeName == "" {
+			safeName = "Untitled"
+		}
 	}
 	filePath := filepath.Join(opts.OutputFolder, safeName+".md")
 

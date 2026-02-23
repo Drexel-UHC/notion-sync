@@ -152,8 +152,9 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		if err != nil {
 			return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
 		}
+		fileNameMap := buildFileNameMap(entries)
 		countBefore := result.Total
-		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress)
+		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress, fileNameMap)
 
 		// Write per-source metadata for multi-source databases
 		if len(sources) > 1 {
@@ -195,6 +196,40 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 	return result, nil
 }
 
+// buildFileNameMap detects duplicate titles among entries and returns a map of
+// pageID → disambiguated filename (without .md extension) for pages that need renaming.
+// Pages with unique titles are not included in the map (empty string = use default).
+func buildFileNameMap(entries []notion.Page) map[string]string {
+	// Count occurrences of each sanitized name
+	type pageInfo struct {
+		id       string
+		safeName string
+	}
+	var pages []pageInfo
+	nameCount := make(map[string]int)
+
+	for _, entry := range entries {
+		title := getPageTitle(&entry)
+		safeName := util.SanitizeFileName(title)
+		if safeName == "" {
+			safeName = "Untitled"
+		}
+		pages = append(pages, pageInfo{id: entry.ID, safeName: safeName})
+		nameCount[safeName]++
+	}
+
+	// Build map for duplicates only
+	result := make(map[string]string)
+	for _, p := range pages {
+		if nameCount[p.safeName] >= 2 {
+			// Remove dashes from notion ID for the suffix
+			cleanID := strings.ReplaceAll(p.id, "-", "")
+			result[p.id] = p.safeName + "-" + cleanID
+		}
+	}
+	return result
+}
+
 // importEntries processes a batch of entries, updating result counters and calling onProgress.
 func importEntries(
 	client NotionClient,
@@ -205,6 +240,7 @@ func importEntries(
 	result *DatabaseFreezeResult,
 	title string,
 	onProgress ProgressCallback,
+	fileNameMap map[string]string,
 ) {
 	total := len(entries)
 	startIdx := result.Total
@@ -220,13 +256,14 @@ func importEntries(
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:       client,
-			NotionID:     entry.ID,
-			OutputFolder: folderPath,
-			DatabaseID:   databaseID,
-			Page:         &entry,
-			SQLStore:     sqlStore,
-			OutputMode:   mode,
+			Client:           client,
+			NotionID:         entry.ID,
+			OutputFolder:     folderPath,
+			DatabaseID:       databaseID,
+			Page:             &entry,
+			SQLStore:         sqlStore,
+			OutputMode:       mode,
+			OverrideFileName: fileNameMap[entry.ID],
 		})
 
 		if err != nil {
@@ -369,6 +406,8 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	}
 
 	total := len(entries)
+	fileNameMap := buildFileNameMap(entries)
+
 	if onProgress != nil {
 		onProgress(ProgressPhase{Phase: PhaseDiffing, Total: total})
 	}
@@ -421,14 +460,15 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:       opts.Client,
-			NotionID:     entry.ID,
-			OutputFolder: opts.FolderPath,
-			DatabaseID:   databaseID,
-			Page:         &entry,
-			Force:        opts.Force,
-			SQLStore:     sqlStore,
-			OutputMode:   mode,
+			Client:           opts.Client,
+			NotionID:         entry.ID,
+			OutputFolder:     opts.FolderPath,
+			DatabaseID:       databaseID,
+			Page:             &entry,
+			Force:            opts.Force,
+			SQLStore:         sqlStore,
+			OutputMode:       mode,
+			OverrideFileName: fileNameMap[entry.ID],
 		})
 
 		if err != nil {
@@ -444,6 +484,20 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 			result.Updated++
 		case "skipped":
 			result.Skipped++
+		}
+	}
+
+	// Clean up orphaned files from filename disambiguation.
+	// If a page was previously saved as "Title.md" but now needs "Title-{id}.md",
+	// remove the old file to avoid duplicates.
+	if mode != OutputSQLite {
+		for id, info := range localFiles {
+			if override, ok := fileNameMap[id]; ok {
+				newPath := filepath.Join(opts.FolderPath, override+".md")
+				if info.filePath != newPath {
+					os.Remove(info.filePath)
+				}
+			}
 		}
 	}
 
