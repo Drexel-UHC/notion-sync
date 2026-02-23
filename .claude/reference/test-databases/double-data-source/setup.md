@@ -26,7 +26,7 @@ A database with two independent data sources, used to test multi-data-source imp
 | Client     | relation     | → Clients data source                               |
 | ID         | unique_id    | prefix: DS1                                         |
 
-### Pages (7 rows)
+### Pages (8 rows)
 
 | Name | Category | Score | Tags | Client | Edge Case |
 |------|----------|-------|------|--------|-----------|
@@ -37,6 +37,7 @@ A database with two independent data sources, used to test multi-data-source imp
 | Edge: Special Ch@rs & "Quotes" / Slashes \ (Parens) | Research | 0 | urgent | — | Filename sanitization (colons, quotes, slashes) |
 | Edge: Très Long Tïtle With Ünïcödé Characters... | Engineering | 999999.99 | urgent, frontend, backend | — | Unicode + very long title + large number |
 | Duplicate Name | Design | 50 | [] | — | Same title exists in Clients source |
+| Duplicate Name | Research | 25 | backend | — | Second within-source duplicate for collision testing |
 
 ---
 
@@ -76,6 +77,7 @@ A database with two independent data sources, used to test multi-data-source imp
 | Special characters in title | Filename sanitization: `@`, `&`, `"`, `/`, `\`, `(`, `)` |
 | Very long title with unicode | Filename truncation + unicode preservation (accented chars) |
 | Duplicate title across sources | No collision since sources live in separate subfolders |
+| Duplicate title within source | Two "Duplicate Name" pages in Projects get `-{id}` suffix |
 | Zero and large numbers | Score=0, Score=999999.99 — boundary values |
 | Negative number | Revenue=-500.75 — negative float in frontmatter |
 | Empty page content | Page with frontmatter only, no body |
@@ -100,7 +102,8 @@ test-output/
     │   ├── Edge- All Nulls.md
     │   ├── Edge- Special Ch@rs & -Quotes- - Slashes  (Parens).md
     │   ├── Edge- Très Long Tïtle With Ünïcödé Characters....md
-    │   └── Duplicate Name.md
+    │   ├── Duplicate Name-{id1}.md
+    │   └── Duplicate Name-{id2}.md
     └── Clients/
         ├── _database.json       (dataSourceId: 30957008-...)
         ├── Delta Corp.md
@@ -111,7 +114,7 @@ test-output/
         └── Edge- Numeric-Like Title 12345.md
 ```
 
-Total: 13 pages (7 Projects + 6 Clients).
+Total: 14 pages (8 Projects + 6 Clients).
 
 ### Key Test Points
 

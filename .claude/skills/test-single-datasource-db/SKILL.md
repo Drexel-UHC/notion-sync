@@ -44,6 +44,14 @@ Run: `go build ./cmd/notion-sync`
 Run: `./notion-sync.exe import 2fe57008-e885-8003-b1f3-cc05981dc6b0 --output ./test-output`
 - **Pass criteria:** created > 0, exit code 0.
 
+### Step 2b: Verify duplicate title disambiguation
+Check that pages with duplicate titles ("Headings & Rich Text") were disambiguated:
+- `Headings & Rich Text.md` should NOT exist (clean name must not exist since the title is duplicated)
+- 2 files matching `Headings & Rich Text-*.md` should exist
+- Grep both files for `notion-id` — they should have different IDs
+- Both should have `notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0`
+- **Pass criteria:** All checks pass.
+
 ### Step 3: No-op refresh
 Run: `./notion-sync.exe refresh "./test-output/test database obsdiain complex"`
 - **Pass criteria:** updated = 0, skipped = total, deleted = 0.
@@ -86,10 +94,10 @@ Query `_notion_sync.db` at `test-output/` root using `sqlite3` (read-only):
 
 | Check | Expected |
 |-------|----------|
-| Total page count for this database | 11 (`SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0'`) |
+| Total page count for this database | 12 (`SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0'`) |
 | All pages have non-empty `body_markdown` | `SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0' AND (body_markdown IS NULL OR body_markdown = '')` = 0 |
 | All pages have non-empty `last_edited_time` | `SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0' AND (last_edited_time IS NULL OR last_edited_time = '')` = 0 |
-| FTS index has entries | `SELECT COUNT(*) FROM pages_fts` >= 11 |
+| FTS index has entries | `SELECT COUNT(*) FROM pages_fts` >= 12 |
 
 - **Pass criteria:** All checks pass.
 

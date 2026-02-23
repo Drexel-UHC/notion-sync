@@ -249,6 +249,26 @@ This tests the `relation` property type producing arrays of page IDs in frontmat
 | table                 | 5       | With/without header col |
 | column_list/column    | 5       | 2-column layout |
 
+### Page 6: "Headings & Rich Text" (duplicate title)
+
+**Purpose:** Test duplicate title disambiguation — same title as Page 1.
+
+**Properties:**
+```
+Name: "Headings & Rich Text"
+Description: "Duplicate title page for collision testing"
+Score: 50
+Category: "Design"
+Tags: ["bug"]
+```
+
+**Block types exercised:**
+- `paragraph` (single paragraph: "This is the duplicate title test page.")
+
+**Note:** This page exists solely to test that `notion-sync` disambiguates filenames when two pages share the same title. Both this page and Page 1 should produce files like `Headings & Rich Text-{notionID}.md` instead of overwriting each other.
+
+---
+
 ### Rich Text Annotations Tested
 
 | Annotation     | Page(s) |
