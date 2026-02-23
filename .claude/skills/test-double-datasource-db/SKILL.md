@@ -11,7 +11,7 @@ Run an integration test using the **double-data-source test database** (`c9aa5ab
 
 - **Notion URL:** https://www.notion.so/c9aa5ab2b470429cba9c86c853782bb2
 - **Reference:** `.claude/reference/test-databases/double-data-source/`
-- **Data sources:** "Projects" (7 pages) + "Clients" (6-7 pages, may include stray "test" page)
+- **Data sources:** "Projects" (8 pages) + "Clients" (6-7 pages, may include stray "test" page)
 
 ## Mode
 
@@ -42,7 +42,7 @@ Run: `go build ./cmd/notion-sync`
 
 ### Step 2: Fresh import
 Run: `./notion-sync.exe import c9aa5ab2-b470-429c-ba9c-86c853782bb2 --output ./test-output`
-- **Pass criteria:** exit code 0, created >= 13.
+- **Pass criteria:** exit code 0, created >= 14.
 
 ### Step 3: Verify subfolder layout
 Check that the import produced the correct multi-source directory structure:
@@ -65,7 +65,7 @@ Checks:
 2. Each subfolder has its own `_database.json`
 3. Top-level `_database.json` exists (no `dataSourceId` field)
 4. Each sub-level `_database.json` has a `dataSourceId` field
-5. `Projects/_database.json` entryCount >= 7
+5. `Projects/_database.json` entryCount >= 8
 6. `Clients/_database.json` entryCount >= 6
 7. `_notion_sync.db` exists at the `test-output/` root
 
@@ -80,7 +80,7 @@ Check the `.md` files in `Projects/` subfolder:
 | Beta Analysis.md exists | File exists |
 | Gamma Design.md exists | File exists |
 | Edge- All Nulls.md exists | File exists |
-| Duplicate Name.md exists | File exists |
+| Duplicate Name disambiguation | `Duplicate Name.md` does NOT exist; 2 files matching `Duplicate Name-*.md` exist with different `notion-id` values; one has `Category: Design`, the other `Category: Research` |
 | Special chars file exists | A file matching `Edge- Special*` exists |
 | Long unicode file exists | A file matching `Edge- Très*` or `Edge- Tr*` exists |
 | All files have `notion-id` | Grep frontmatter |
@@ -125,9 +125,9 @@ sqlite3 test-output/_notion_sync.db "SELECT id, title FROM pages WHERE title LIK
 
 | Check | Expected |
 |-------|----------|
-| Total page count | >= 13 |
+| Total page count | >= 14 |
 | Distinct database_id count | 1 (all pages share same parent database ID) |
-| "Duplicate Name" rows | Exactly 2 (one from each source) |
+| "Duplicate Name" rows | Exactly 3 (2 from Projects + 1 from Clients) |
 | Edge case rows | >= 5 (All Nulls, Special, Long, Empty Everything, Numeric-Like) |
 | All pages have non-empty `last_edited_time` | `SELECT COUNT(*) FROM pages WHERE last_edited_time IS NULL OR last_edited_time = ''` = 0 |
 
@@ -136,7 +136,7 @@ sqlite3 test-output/_notion_sync.db "SELECT id, title FROM pages WHERE title LIK
 ### Step 7: No-op refresh (top-level)
 Run refresh on the **parent** folder (not a subfolder) to test multi-source delegation:
 `./notion-sync.exe refresh "./test-output/test database - double data source"`
-- **Pass criteria:** updated = 0, skipped = total (>= 13).
+- **Pass criteria:** updated = 0, skipped = total (>= 14).
 
 ### Step 8: No-op refresh (per-source)
 Run refresh on each subfolder individually:
@@ -159,7 +159,7 @@ Run: `./notion-sync.exe refresh "./test-output/test database - double data sourc
 
 ### Step 11: Force refresh (top-level)
 Run: `./notion-sync.exe refresh "./test-output/test database - double data source" --force`
-- **Pass criteria:** updated = total (>= 13), skipped = 0.
+- **Pass criteria:** updated = total (>= 14), skipped = 0.
 
 ### Step 12: Verify file mtime preservation
 For each synced `.md` file in both `Projects/` and `Clients/`, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
