@@ -10,7 +10,8 @@
       "mcp__context7__query-docs",
       "mcp__notion__notion-create-database",
       "mcp__claude_ai_Notion__notion-fetch",
-      "mcp__claude_ai_Notion__notion-create-pages"
+      "mcp__claude_ai_Notion__notion-create-pages",
+      "mcp__claude_ai_Notion__notion-update-page"
     ]
   }
 }
