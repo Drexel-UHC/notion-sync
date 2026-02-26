@@ -57,7 +57,7 @@ Same as Step 2 — `--no-cleanup` always passed to keep files for Step 4.
 
 **Skip if `--skip-system` was passed.**
 
-This validates that the shared `_notion_sync.db` at `test-output/` is consistent with all the markdown files produced by both system tests.
+This validates that the shared `_notion_sync.sqlite` at `test-output/` is consistent with all the markdown files produced by both system tests.
 
 Run these checks using `sqlite3` (read-only) and filesystem inspection:
 
@@ -112,7 +112,7 @@ Otherwise, clean up everything:
 1. Delete `test-output/test database obsdiain complex/` (single-source folder)
 2. Delete `test-output/test database - double data source/` (double-source folder)
 3. Clean SQLite: delete rows from `pages` where `database_id` IN the two test database IDs. Use Python or Go to execute the SQL.
-4. If `_notion_sync.db` has zero rows remaining in `pages`, delete the `.db` file entirely.
+4. If `_notion_sync.sqlite` has zero rows remaining in `pages`, delete the `.sqlite` file entirely.
 5. If `test-output/` is now empty, delete it.
 
 Print: `Step 5: Cleanup — done`

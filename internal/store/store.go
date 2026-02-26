@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const dbFileName = "_notion_sync.db"
+const dbFileName = "_notion_sync.sqlite"
 
 // Store wraps a SQLite database for storing synced page data.
 type Store struct {
@@ -32,7 +32,7 @@ type PageData struct {
 	DatabaseID     string
 }
 
-// OpenStore opens or creates a SQLite database at workspacePath/_notion_sync.db.
+// OpenStore opens or creates a SQLite database at workspacePath/_notion_sync.sqlite.
 func OpenStore(workspacePath string) (*Store, error) {
 	dbPath := filepath.Join(workspacePath, dbFileName)
 	db, err := sql.Open("sqlite", dbPath)

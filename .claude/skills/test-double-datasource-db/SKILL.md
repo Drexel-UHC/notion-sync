@@ -49,7 +49,7 @@ Check that the import produced the correct multi-source directory structure:
 
 ```
 test-output/
-├── _notion_sync.db
+├── _notion_sync.sqlite
 └── test database - double data source/
     ├── _database.json           (top-level, NO dataSourceId)
     ├── Projects/
@@ -67,7 +67,7 @@ Checks:
 4. Each sub-level `_database.json` has a `dataSourceId` field
 5. `Projects/_database.json` entryCount >= 8
 6. `Clients/_database.json` entryCount >= 6
-7. `_notion_sync.db` exists at the `test-output/` root
+7. `_notion_sync.sqlite` exists at the `test-output/` root
 
 - **Pass criteria:** All 7 checks pass.
 
@@ -114,13 +114,13 @@ Check the `.md` files in `Clients/` subfolder:
 - **Pass criteria:** All checks pass.
 
 ### Step 6: Verify SQLite database
-Query `_notion_sync.db` at `test-output/` root:
+Query `_notion_sync.sqlite` at `test-output/` root:
 
 ```bash
-sqlite3 test-output/_notion_sync.db "SELECT COUNT(*) FROM pages"
-sqlite3 test-output/_notion_sync.db "SELECT COUNT(DISTINCT database_id) FROM pages"
-sqlite3 test-output/_notion_sync.db "SELECT id, title FROM pages WHERE title = 'Duplicate Name'"
-sqlite3 test-output/_notion_sync.db "SELECT id, title FROM pages WHERE title LIKE 'Edge:%'"
+sqlite3 test-output/_notion_sync.sqlite "SELECT COUNT(*) FROM pages"
+sqlite3 test-output/_notion_sync.sqlite "SELECT COUNT(DISTINCT database_id) FROM pages"
+sqlite3 test-output/_notion_sync.sqlite "SELECT id, title FROM pages WHERE title = 'Duplicate Name'"
+sqlite3 test-output/_notion_sync.sqlite "SELECT id, title FROM pages WHERE title LIKE 'Edge:%'"
 ```
 
 | Check | Expected |
@@ -172,8 +172,8 @@ Use Notion MCP tools to restore the page edited in Step 9 back to its original p
 If `--no-cleanup` was passed, **skip this step** and print `Step 14: Skipped (--no-cleanup)`.
 Otherwise:
 1. Delete only `test-output/test database - double data source/` (not the entire `test-output/` directory).
-2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.db` where `database_id` matches this test's database ID (`c9aa5ab2-b470-429c-ba9c-86c853782bb2`). Use Python or Go to run the SQL.
-3. If `_notion_sync.db` has zero rows remaining in `pages`, delete the `.db` file entirely.
+2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.sqlite` where `database_id` matches this test's database ID (`c9aa5ab2-b470-429c-ba9c-86c853782bb2`). Use Python or Go to run the SQL.
+3. If `_notion_sync.sqlite` has zero rows remaining in `pages`, delete the `.sqlite` file entirely.
 4. If `test-output/` is now empty, delete it.
 
 ## Done

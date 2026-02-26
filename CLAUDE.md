@@ -10,7 +10,7 @@ CLI tool that syncs Notion databases to local Markdown files with YAML frontmatt
 - Tool use
   - **Minimize tool calls.** Use Grep, Read, Glob directly — they're fast and parallel. Never spawn a Task agent (subagent) for simple file reads or searches.
   - **No heavyweight agents for simple operations.** If a skill just needs to read/grep a handful of files, do it inline. If you think a Task agent is needed, ask me first.
-  - **SQLite CLI** — Use `sqlite3` (read-only) to inspect `_notion_sync.db` files. Never write to them directly; the Go sync pipeline owns all writes.
+  - **SQLite CLI** — Use `sqlite3` (read-only) to inspect `_notion_sync.sqlite` files. Never write to them directly; the Go sync pipeline owns all writes.
 - Refer to context7 first if have any questions about claude code, notion mcp or github cli
 
 ## Quick Start (for agents)

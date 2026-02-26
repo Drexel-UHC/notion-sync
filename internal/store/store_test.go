@@ -26,9 +26,9 @@ func TestOpenStore_CreatesDB(t *testing.T) {
 	}
 	defer s.Close()
 
-	dbPath := filepath.Join(dir, "_notion_sync.db")
+	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Fatal("expected _notion_sync.db to exist")
+		t.Fatal("expected _notion_sync.sqlite to exist")
 	}
 }
 

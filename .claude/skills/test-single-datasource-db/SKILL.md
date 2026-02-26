@@ -90,7 +90,7 @@ For each synced `.md` file, compare the file's modification time (via `stat`) ag
 - **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
 
 ### Step 10: Verify SQLite database
-Query `_notion_sync.db` at `test-output/` root using `sqlite3` (read-only):
+Query `_notion_sync.sqlite` at `test-output/` root using `sqlite3` (read-only):
 
 | Check | Expected |
 |-------|----------|
@@ -108,8 +108,8 @@ Use Notion MCP tools to restore the page edited in Step 4 back to its original p
 If `--no-cleanup` was passed, **skip this step** and print `Step 12: Skipped (--no-cleanup)`.
 Otherwise:
 1. Delete only `test-output/test database obsdiain complex/` (not the entire `test-output/` directory).
-2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.db` where `database_id` matches this test's database ID (`2fe57008-e885-8003-b1f3-cc05981dc6b0`). Use Python or Go to run the SQL.
-3. If `_notion_sync.db` has zero rows remaining in `pages`, delete the `.db` file entirely.
+2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.sqlite` where `database_id` matches this test's database ID (`2fe57008-e885-8003-b1f3-cc05981dc6b0`). Use Python or Go to run the SQL.
+3. If `_notion_sync.sqlite` has zero rows remaining in `pages`, delete the `.sqlite` file entirely.
 4. If `test-output/` is now empty, delete it.
 
 ## Done
