@@ -189,6 +189,11 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
+	// Write CLAUDE.md at workspace root (only on first import, won't overwrite)
+	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
+
 	if onProgress != nil {
 		onProgress(ProgressPhase{Phase: PhaseComplete})
 	}
@@ -311,6 +316,11 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	mode := resolveOutputMode(opts.OutputMode)
 	workspacePath := filepath.Dir(opts.FolderPath)
 	sqlStore := openStoreIfNeeded(mode, workspacePath)
+
+	// Ensure CLAUDE.md exists at workspace root (backfill for older imports)
+	if err := WriteClaudeMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
 	if sqlStore != nil {
 		defer sqlStore.Close()
 	}

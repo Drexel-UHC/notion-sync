@@ -338,9 +338,9 @@ func TestFreshImport_MarkdownOnly(t *testing.T) {
 	}
 
 	// No .db file should exist (markdown-only mode)
-	dbPath := filepath.Join(dir, "_notion_sync.db")
+	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Error("expected no _notion_sync.db in markdown-only mode")
+		t.Error("expected no _notion_sync.sqlite in markdown-only mode")
 	}
 }
 
@@ -388,9 +388,9 @@ func TestFreshImport_SQLiteOnly(t *testing.T) {
 	}
 
 	// .db file should exist
-	dbPath := filepath.Join(dir, "_notion_sync.db")
+	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Error("expected _notion_sync.db to exist in sqlite mode")
+		t.Error("expected _notion_sync.sqlite to exist in sqlite mode")
 	}
 }
 
@@ -436,9 +436,9 @@ func TestFreshImport_BothMode(t *testing.T) {
 	if _, err := os.Stat(mdPath); os.IsNotExist(err) {
 		t.Error("expected .md file to exist in both mode")
 	}
-	dbPath := filepath.Join(dir, "_notion_sync.db")
+	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Error("expected _notion_sync.db to exist in both mode")
+		t.Error("expected _notion_sync.sqlite to exist in both mode")
 	}
 }
 
