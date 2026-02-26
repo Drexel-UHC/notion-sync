@@ -158,10 +158,8 @@ func runImport(args []string) error {
 	if key == "" {
 		key = cfg.APIKey
 	}
-	if key == "" {
-		return fmt.Errorf("no API key provided.\n" +
-			"Set it via: notion-sync config set apiKey <key> (stored in OS keychain)\n" +
-			"Or pass --api-key <key>, or set NOTION_SYNC_API_KEY env var")
+	if msg := config.ValidateAPIKey(key); msg != "" {
+		return fmt.Errorf("%s", msg)
 	}
 
 	outputFolder := *output
@@ -286,8 +284,8 @@ func runRefresh(args []string) error {
 	if key == "" {
 		key = cfg.APIKey
 	}
-	if key == "" {
-		return fmt.Errorf("no API key provided")
+	if msg := config.ValidateAPIKey(key); msg != "" {
+		return fmt.Errorf("%s", msg)
 	}
 
 	folderPath := fs.Arg(0)
@@ -442,9 +440,20 @@ func runList(args []string) error {
 //// 2.4 Config ----
 
 func runConfig(args []string) error {
-	if len(args) < 3 || args[0] != "set" {
-		return fmt.Errorf("usage: notion-sync config set <key> <value>\n" +
-			"Keys: apiKey, defaultOutputFolder")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: notion-sync config get [key]\n" +
+			"       notion-sync config set <key> <value>\n" +
+			"Keys: apiKey, defaultOutputFolder, outputMode")
+	}
+
+	if args[0] == "get" {
+		return runConfigGet(args[1:])
+	}
+
+	if args[0] != "set" || len(args) < 3 {
+		return fmt.Errorf("usage: notion-sync config get [key]\n" +
+			"       notion-sync config set <key> <value>\n" +
+			"Keys: apiKey, defaultOutputFolder, outputMode")
 	}
 
 	key := args[1]
@@ -463,12 +472,65 @@ func runConfig(args []string) error {
 		return fmt.Errorf("unknown config key: %s\nValid keys: %s", key, strings.Join(validKeys, ", "))
 	}
 
+	if key == "apiKey" {
+		if msg := config.ValidateAPIKey(value); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+
 	if err := config.SaveConfig(key, value); err != nil {
 		return err
 	}
 
 	fmt.Printf("Saved %s\n", key)
 	return nil
+}
+
+func runConfigGet(args []string) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	// If a specific key is requested
+	if len(args) > 0 {
+		switch args[0] {
+		case "apiKey":
+			printAPIKeyStatus(cfg.APIKey)
+		case "defaultOutputFolder":
+			fmt.Println(cfg.DefaultOutputFolder)
+		case "outputMode":
+			if cfg.OutputMode == "" {
+				fmt.Println("(default: both)")
+			} else {
+				fmt.Println(cfg.OutputMode)
+			}
+		default:
+			return fmt.Errorf("unknown config key: %s", args[0])
+		}
+		return nil
+	}
+
+	// Show all config
+	fmt.Println("Config:")
+	fmt.Printf("  apiKey:              ")
+	printAPIKeyStatus(cfg.APIKey)
+	fmt.Printf("  defaultOutputFolder: %s\n", cfg.DefaultOutputFolder)
+	if cfg.OutputMode != "" {
+		fmt.Printf("  outputMode:          %s\n", cfg.OutputMode)
+	}
+	fmt.Printf("\n  Config file: %s\n", config.GetConfigPath())
+	return nil
+}
+
+func printAPIKeyStatus(key string) {
+	if key == "" {
+		fmt.Println("(not set)")
+	} else if len(key) > 8 {
+		fmt.Printf("...%s (set, %d chars)\n", key[len(key)-4:], len(key))
+	} else {
+		fmt.Printf("(set, %d chars)\n", len(key))
+	}
 }
 
 // 3. Helpers ----

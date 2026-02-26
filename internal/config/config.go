@@ -140,6 +140,26 @@ func removeAPIKeyFromConfigFile() error {
 	return os.WriteFile(configPath, append(newData, '\n'), 0600)
 }
 
+// ValidateAPIKey checks if the key looks like a valid Notion API key.
+// Returns an error message if invalid, empty string if valid.
+func ValidateAPIKey(key string) string {
+	if key == "" {
+		return "no API key provided.\n" +
+			"Set it via: notion-sync config set apiKey <key> (stored in OS keychain)\n" +
+			"Or pass --api-key <key>, or set NOTION_SYNC_API_KEY env var"
+	}
+	if len(key) < 20 {
+		return fmt.Sprintf("API key is too short (%d chars). Notion API keys are ~50 characters and start with 'ntn_' or 'secret_'.\n"+
+			"Fix it via: notion-sync config set apiKey <your-key>", len(key))
+	}
+	hasValidPrefix := (len(key) >= 4 && key[:4] == "ntn_") || (len(key) >= 7 && key[:7] == "secret_")
+	if !hasValidPrefix {
+		return "API key has an unrecognized prefix. Notion API keys start with 'ntn_' or 'secret_'.\n" +
+			"Fix it via: notion-sync config set apiKey <your-key>"
+	}
+	return ""
+}
+
 // MigrateAPIKeyToKeychain migrates API key from config file to keyring.
 // Idempotent: skips if keychain already has a key or config file has none.
 func MigrateAPIKeyToKeychain() {
