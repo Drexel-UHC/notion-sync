@@ -29,26 +29,18 @@
 
 ## What's Left
 
-### 1. Test page in Notion
-- Page exists at: `31357008-e885-80c3-90f4-d148f0854bba`
-- URL: https://www.notion.so/drexel-climate/Test-Notion-sync-single-page-31357008e88580c390f4d148f0854bba
-- **Needs**: Connect the Notion integration to this page (share with it), then add some test content (headings, paragraphs, code block, list)
-- Use Notion MCP tools to add content
+All items complete. Feature is ready for merge.
 
-### 2. End-to-end test
-- After integration is connected, run: `./notion-sync.exe import 31357008-e885-80c3-90f4-d148f0854bba --output ./test-output`
-- Verify folder structure: `test-output/pages/<title>_31357008/` with `_page.json` + `<title>.md`
-- Test refresh: `./notion-sync.exe refresh test-output/pages/<folder>`
-- Test list: `./notion-sync.exe list ./test-output`
+### Completed items
+1. Test page connected to integration and populated with content (h1-h3, rich text, lists, code, quote, divider)
+2. E2E test passed: import, no-op refresh, force refresh, list, SQLite — all verified
+3. Reference doc created: `.claude/reference/test-pages/standalone/setup.md`
+4. Test skill created: `/test-standalone-page`
+5. `/test` skill updated with standalone page step (Step 4)
+6. API key validation added: `config.ValidateAPIKey()` checks length and prefix on all commands + `config set`
+7. `config get` command added: shows all config with masked API key
 
-### 3. Reference doc
-- Create `.claude/reference/test-pages/standalone/setup.md` documenting the test page
-
-### 4. Test skill
-- Create `.claude/skills/test-standalone-page/SKILL.md`
-- Update `.claude/skills/test/SKILL.md` to include standalone page test step
-
-### 5. Possible issue: IsNotFoundError false positives
+### Note: IsNotFoundError false positives
 - Notion returns 401 "API token is invalid" both for wrong-type queries AND genuinely invalid tokens
 - Current code treats 401 as "not a database, try as page" — if the token is truly invalid, the page fetch also fails with a clear error, so this is safe
-- But worth monitoring if edge cases appear
+- API key validation (added in this session) catches most bad-key scenarios before any API call is made
