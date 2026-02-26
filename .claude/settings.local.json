@@ -11,7 +11,14 @@
       "mcp__notion__notion-create-database",
       "mcp__claude_ai_Notion__notion-fetch",
       "mcp__claude_ai_Notion__notion-create-pages",
-      "mcp__claude_ai_Notion__notion-update-page"
+      "mcp__claude_ai_Notion__notion-update-page",
+      "mcp__notion__API-get-block-children",
+      "mcp__notion__API-retrieve-a-page",
+      "mcp__notion__API-post-search"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "notion"
+  ]
 }
