@@ -278,6 +278,20 @@ func (c *Client) QueryAllEntries(dataSourceID string) ([]Page, error) {
 	return entries, nil
 }
 
+// IsNotFoundError returns true if the error indicates the requested
+// Notion object was not found or not accessible as the expected type.
+// Notion returns 404 for missing objects and 401 "API token is invalid"
+// when querying an ID against the wrong object type (e.g. page ID on /databases/).
+func IsNotFoundError(err error) bool {
+	var apiErr *ErrorResponse
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == 404 ||
+			apiErr.Code == "object_not_found" ||
+			(apiErr.Status == 401 && strings.Contains(apiErr.Message, "API token is invalid"))
+	}
+	return false
+}
+
 var hexIDRe = regexp.MustCompile(`[a-f0-9]{32}`)
 
 // NormalizeNotionID accepts a 32-char hex string, UUID with dashes, or full Notion URL.
