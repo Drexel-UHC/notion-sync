@@ -316,6 +316,11 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	mode := resolveOutputMode(opts.OutputMode)
 	workspacePath := filepath.Dir(opts.FolderPath)
 	sqlStore := openStoreIfNeeded(mode, workspacePath)
+
+	// Ensure CLAUDE.md exists at workspace root (backfill for older imports)
+	if err := WriteClaudeMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
 	if sqlStore != nil {
 		defer sqlStore.Close()
 	}
