@@ -189,6 +189,11 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
+	// Write CLAUDE.md at workspace root (only on first import, won't overwrite)
+	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
+
 	if onProgress != nil {
 		onProgress(ProgressPhase{Phase: PhaseComplete})
 	}
