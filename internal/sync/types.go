@@ -11,6 +11,15 @@ type FrozenDatabase struct {
 	EntryCount   int    `json:"entryCount"`
 }
 
+// FrozenPage represents metadata stored in _page.json for standalone pages.
+type FrozenPage struct {
+	PageID       string `json:"pageId"`
+	Title        string `json:"title"`
+	URL          string `json:"url"`
+	FolderPath   string `json:"folderPath"`
+	LastSyncedAt string `json:"lastSyncedAt"`
+}
+
 // DatabaseFreezeResult represents the result of a database sync operation.
 type DatabaseFreezeResult struct {
 	Title      string
@@ -26,9 +35,10 @@ type DatabaseFreezeResult struct {
 
 // PageFreezeResult represents the result of freezing a single page.
 type PageFreezeResult struct {
-	Status   string // "created", "updated", or "skipped"
-	FilePath string
-	Title    string
+	Status     string // "created", "updated", or "skipped"
+	FilePath   string
+	Title      string
+	FolderPath string // set by FreezeStandalonePage for standalone pages
 }
 
 // ProgressPhase represents the current phase of a sync operation.
