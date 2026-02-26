@@ -52,25 +52,27 @@ func reorderArgs(args []string) []string {
 	return append(flags, positional...)
 }
 
-var usage = `notion-sync — Sync Notion databases to Markdown (v` + version + `)
+var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + version + `)
 
 Usage:
-  notion-sync import <database-id> [--output <folder>] [--output-mode both|markdown|sqlite] [--api-key <key>]
-  notion-sync refresh <database-folder> [--ids id1,id2] [--force] [--output-mode both|markdown|sqlite] [--api-key <key>]
+  notion-sync import <database-or-page-id> [--output <folder>] [--output-mode both|markdown|sqlite] [--api-key <key>]
+  notion-sync refresh <folder> [--ids id1,id2] [--force] [--output-mode both|markdown|sqlite] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync config set <key> <value>
 
 Commands:
-  import    Import a Notion database to local Markdown files
-  refresh   Refresh an existing synced database (incremental update)
-            --ids id1,id2  Refresh only specific pages by ID
+  import    Import a Notion database or standalone page to local Markdown files
+            Automatically detects whether the ID is a database or page.
+  refresh   Refresh an existing synced database or standalone page (incremental update)
+            --ids id1,id2  Refresh only specific pages by ID (databases only)
             --force, -f    Resync all entries, ignoring timestamps
-  list      List all synced databases in a folder
+  list      List all synced databases and pages in a folder
   config    Manage configuration (apiKey, defaultOutputFolder, outputMode)
 
 Examples:
   notion-sync import abc123de-f456-7890-abcd-ef1234567890 --output ./my-notes
   notion-sync refresh ./notion/My\ Database
+  notion-sync refresh ./notion/pages/My\ Page_abc12345
   notion-sync refresh ./notion/My\ Database --force
   notion-sync list ./notion
 
@@ -143,8 +145,8 @@ func runImport(args []string) error {
 	}
 
 	if fs.NArg() == 0 {
-		return fmt.Errorf("missing Notion database URL or ID\n" +
-			"Usage: notion-sync import <database-id> [--output <folder>] [--api-key <key>]")
+		return fmt.Errorf("missing Notion database or page URL/ID\n" +
+			"Usage: notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>]")
 	}
 
 	cfg, err := config.LoadConfig()
@@ -174,7 +176,7 @@ func runImport(args []string) error {
 	}
 
 	rawID := fs.Arg(0)
-	databaseID, err := notion.NormalizeNotionID(rawID)
+	notionID, err := notion.NormalizeNotionID(rawID)
 	if err != nil {
 		return err
 	}
@@ -186,12 +188,23 @@ func runImport(args []string) error {
 		return err
 	}
 
+	// Auto-detect: try database first, fall back to page
+	_, dbErr := client.GetDatabase(notionID)
+	if dbErr != nil && notion.IsNotFoundError(dbErr) {
+		// Not a database — try as a standalone page
+		return runImportPage(client, notionID, outputFolder, mode)
+	}
+	if dbErr != nil {
+		return fmt.Errorf("fetch database: %w", dbErr)
+	}
+
+	// It's a database — proceed with database import
 	fmt.Println("Importing database...")
 	var dbTitle string
 
 	result, err := sync.FreshDatabaseImport(sync.DatabaseImportOptions{
 		Client:       client,
-		DatabaseID:   databaseID,
+		DatabaseID:   notionID,
 		OutputFolder: outputFolder,
 		OutputMode:   mode,
 	}, func(p sync.ProgressPhase) {
@@ -224,6 +237,26 @@ func runImport(args []string) error {
 	return nil
 }
 
+func runImportPage(client *notion.Client, pageID, outputFolder string, mode sync.OutputMode) error {
+	fmt.Println("Importing standalone page...")
+
+	result, err := sync.FreezeStandalonePage(sync.StandalonePageImportOptions{
+		Client:       client,
+		PageID:       pageID,
+		OutputFolder: outputFolder,
+		OutputMode:   mode,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Done: \"%s\"\n", result.Title)
+	fmt.Printf("  Folder: %s\n", result.FolderPath)
+	fmt.Printf("  Status: %s\n", result.Status)
+
+	return nil
+}
+
 //// 2.2 Refresh ----
 
 func runRefresh(args []string) error {
@@ -239,8 +272,8 @@ func runRefresh(args []string) error {
 	}
 
 	if fs.NArg() == 0 {
-		return fmt.Errorf("missing database folder path\n" +
-			"Usage: notion-sync refresh <database-folder> [--ids id1,id2] [--force] [--api-key <key>]\n" +
+		return fmt.Errorf("missing folder path\n" +
+			"Usage: notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>]\n" +
 			"Example: notion-sync refresh ./notion/My\\ Database")
 	}
 
@@ -281,6 +314,12 @@ func runRefresh(args []string) error {
 	mode, err := resolveOutputModeFlag(*outputMode, cfg)
 	if err != nil {
 		return err
+	}
+
+	// Check if the folder is a standalone page (has _page.json)
+	pageMeta, _ := sync.ReadPageMetadata(folderPath)
+	if pageMeta != nil {
+		return runRefreshPage(client, folderPath, forceRefresh, mode)
 	}
 
 	if len(pageIDs) > 0 {
@@ -328,6 +367,29 @@ func runRefresh(args []string) error {
 	return nil
 }
 
+func runRefreshPage(client *notion.Client, folderPath string, force bool, mode sync.OutputMode) error {
+	if force {
+		fmt.Println("Force refreshing page (ignoring timestamps)...")
+	} else {
+		fmt.Println("Refreshing page...")
+	}
+
+	result, err := sync.RefreshStandalonePage(sync.RefreshStandalonePageOptions{
+		Client:     client,
+		FolderPath: folderPath,
+		Force:      force,
+		OutputMode: mode,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Done: \"%s\"\n", result.Title)
+	fmt.Printf("  Status: %s\n", result.Status)
+
+	return nil
+}
+
 //// 2.3 List ----
 
 func runList(args []string) error {
@@ -341,19 +403,37 @@ func runList(args []string) error {
 		return err
 	}
 
-	if len(databases) == 0 {
-		fmt.Printf("No synced databases found in %s\n", outputFolder)
+	pages, err := sync.ListSyncedPages(outputFolder)
+	if err != nil {
+		return err
+	}
+
+	if len(databases) == 0 && len(pages) == 0 {
+		fmt.Printf("No synced databases or pages found in %s\n", outputFolder)
 		return nil
 	}
 
-	fmt.Printf("Synced databases in %s:\n\n", outputFolder)
-	for _, db := range databases {
-		fmt.Printf("  %s\n", db.Title)
-		fmt.Printf("    Folder:      %s\n", db.FolderPath)
-		fmt.Printf("    Database ID: %s\n", db.DatabaseID)
-		fmt.Printf("    Entries:     %d\n", db.EntryCount)
-		fmt.Printf("    Last synced: %s\n", db.LastSyncedAt)
-		fmt.Println()
+	if len(databases) > 0 {
+		fmt.Printf("Synced databases in %s:\n\n", outputFolder)
+		for _, db := range databases {
+			fmt.Printf("  %s\n", db.Title)
+			fmt.Printf("    Folder:      %s\n", db.FolderPath)
+			fmt.Printf("    Database ID: %s\n", db.DatabaseID)
+			fmt.Printf("    Entries:     %d\n", db.EntryCount)
+			fmt.Printf("    Last synced: %s\n", db.LastSyncedAt)
+			fmt.Println()
+		}
+	}
+
+	if len(pages) > 0 {
+		fmt.Printf("Synced pages in %s:\n\n", outputFolder)
+		for _, p := range pages {
+			fmt.Printf("  %s\n", p.Title)
+			fmt.Printf("    Folder:      %s\n", p.FolderPath)
+			fmt.Printf("    Page ID:     %s\n", p.PageID)
+			fmt.Printf("    Last synced: %s\n", p.LastSyncedAt)
+			fmt.Println()
+		}
 	}
 
 	return nil
