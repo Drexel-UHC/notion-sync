@@ -14,7 +14,8 @@
       "mcp__claude_ai_Notion__notion-update-page",
       "mcp__notion__API-get-block-children",
       "mcp__notion__API-retrieve-a-page",
-      "mcp__notion__API-post-search"
+      "mcp__notion__API-post-search",
+      "mcp__notion__API-retrieve-a-block"
     ]
   },
   "enableAllProjectMcpServers": true,
