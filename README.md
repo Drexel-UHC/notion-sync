@@ -25,6 +25,27 @@ scoop install notion-sync
 
 Download the binary for your platform from [GitHub Releases](https://github.com/ran-codes/notion-sync/releases), rename it to `notion-sync` (or `notion-sync.exe` on Windows), and add it to your PATH.
 
+## Update
+
+### Install script (macOS / Linux)
+
+Re-run the install script — it always fetches the latest release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ran-codes/notion-sync/main/scripts/install.sh | bash
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop update
+scoop update notion-sync
+```
+
+### Manual
+
+Download the latest binary from [GitHub Releases](https://github.com/ran-codes/notion-sync/releases) and replace the existing one.
+
 ## Usage
 
 ```sh
