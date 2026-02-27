@@ -237,6 +237,8 @@ func runImport(args []string) error {
 
 func runImportPage(client *notion.Client, pageID, outputFolder string, mode sync.OutputMode) error {
 	fmt.Println("Importing standalone page...")
+	fmt.Println("Note: Pages with deeply nested content (bullet points, toggles, callouts)")
+	fmt.Println("      require one API call per nesting level. Notion limits ~3 requests/sec.")
 
 	result, err := sync.FreezeStandalonePage(sync.StandalonePageImportOptions{
 		Client:       client,

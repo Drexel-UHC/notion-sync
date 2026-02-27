@@ -78,14 +78,24 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		}
 	}
 
-	// Fetch all blocks
-	blocks, err := opts.Client.FetchAllBlocks(opts.NotionID)
+	// Fetch entire block tree concurrently with progress
+	tree, err := opts.Client.FetchBlockTree(opts.NotionID, func(fetched, found int) {
+		fmt.Fprintf(os.Stderr, "\r  Fetching blocks... %d/%d (discovering nested content)", fetched, found)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch blocks: %w", err)
 	}
+	// Count total blocks fetched
+	totalBlocks := 0
+	for _, children := range tree.Children {
+		totalBlocks += len(children)
+	}
+	fmt.Fprintf(os.Stderr, "\r  Fetching blocks... done (%d blocks fetched)          \n", totalBlocks)
 
-	// Convert blocks to markdown
-	ctx := &markdown.ConvertContext{Client: opts.Client, IndentLevel: 0}
+	blocks := tree.Children[opts.NotionID]
+
+	// Convert blocks to markdown using cached tree (no more API calls)
+	ctx := &markdown.ConvertContext{Client: &markdown.CachedBlockFetcher{Tree: tree}, IndentLevel: 0}
 	md, err := markdown.ConvertBlocksToMarkdown(blocks, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("convert blocks: %w", err)
