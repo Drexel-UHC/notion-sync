@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
@@ -77,14 +78,24 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		}
 	}
 
-	// Fetch all blocks
-	blocks, err := opts.Client.FetchAllBlocks(opts.NotionID)
+	// Fetch entire block tree concurrently with progress
+	tree, err := opts.Client.FetchBlockTree(opts.NotionID, func(fetched, found int) {
+		fmt.Fprintf(os.Stderr, "\r  Fetching blocks... %d/%d (discovering nested content)", fetched, found)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("fetch blocks: %w", err)
 	}
+	// Count total blocks fetched
+	totalBlocks := 0
+	for _, children := range tree.Children {
+		totalBlocks += len(children)
+	}
+	fmt.Fprintf(os.Stderr, "\r  Fetching blocks... done (%d blocks fetched)          \n", totalBlocks)
 
-	// Convert blocks to markdown
-	ctx := &markdown.ConvertContext{Client: opts.Client, IndentLevel: 0}
+	blocks := tree.Children[opts.NotionID]
+
+	// Convert blocks to markdown using cached tree (no more API calls)
+	ctx := &markdown.ConvertContext{Client: &markdown.CachedBlockFetcher{Tree: tree}, IndentLevel: 0}
 	md, err := markdown.ConvertBlocksToMarkdown(blocks, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("convert blocks: %w", err)
@@ -171,6 +182,133 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	}
 
 	return &PageFreezeResult{Status: status, FilePath: filePath, Title: safeName}, nil
+}
+
+// StandalonePageImportOptions contains options for importing a standalone page.
+type StandalonePageImportOptions struct {
+	Client       NotionClient
+	PageID       string
+	OutputFolder string
+	OutputMode   OutputMode
+}
+
+// FreezeStandalonePage imports a standalone Notion page (not a database entry).
+func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, error) {
+	// Fetch the page to get title
+	page, err := opts.Client.GetPage(opts.PageID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch page: %w", err)
+	}
+
+	title := getPageTitle(page)
+	safeName := util.SanitizeFileName(title)
+	if safeName == "" {
+		safeName = "Untitled"
+	}
+
+	// Build folder: <outputFolder>/pages/<title>_<shortID>/
+	shortID := strings.ReplaceAll(opts.PageID, "-", "")
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	folderName := safeName + "_" + shortID
+	folderPath := filepath.Join(opts.OutputFolder, "pages", folderName)
+
+	if err := os.MkdirAll(folderPath, 0755); err != nil {
+		return nil, fmt.Errorf("create folder: %w", err)
+	}
+
+	// Open SQLite store at workspace root
+	mode := resolveOutputMode(opts.OutputMode)
+	sqlStore := openStoreIfNeeded(mode, opts.OutputFolder)
+	if sqlStore != nil {
+		defer sqlStore.Close()
+	}
+
+	result, err := FreezePage(FreezePageOptions{
+		Client:       opts.Client,
+		NotionID:     opts.PageID,
+		OutputFolder: folderPath,
+		DatabaseID:   "", // standalone page — no database
+		Page:         page,
+		SQLStore:     sqlStore,
+		OutputMode:   mode,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Write page metadata
+	meta := &FrozenPage{
+		PageID:       opts.PageID,
+		Title:        title,
+		URL:          page.URL,
+		FolderPath:   folderPath,
+		LastSyncedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := WritePageMetadata(folderPath, meta); err != nil {
+		return nil, fmt.Errorf("write metadata: %w", err)
+	}
+
+	// Write CLAUDE.md at workspace root
+	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
+
+	result.FolderPath = folderPath
+	return result, nil
+}
+
+// RefreshStandalonePageOptions contains options for refreshing a standalone page.
+type RefreshStandalonePageOptions struct {
+	Client     NotionClient
+	FolderPath string
+	Force      bool
+	OutputMode OutputMode
+}
+
+// RefreshStandalonePage refreshes a previously imported standalone page.
+func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult, error) {
+	meta, err := ReadPageMetadata(opts.FolderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	if meta == nil {
+		return nil, fmt.Errorf("no %s found in %s", PageMetadataFile, opts.FolderPath)
+	}
+
+	mode := resolveOutputMode(opts.OutputMode)
+	workspacePath := filepath.Dir(filepath.Dir(opts.FolderPath)) // pages/<folder> → workspace
+	sqlStore := openStoreIfNeeded(mode, workspacePath)
+	if sqlStore != nil {
+		defer sqlStore.Close()
+	}
+
+	// Backfill CLAUDE.md at workspace root
+	if err := WriteClaudeMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	}
+
+	result, err := FreezePage(FreezePageOptions{
+		Client:       opts.Client,
+		NotionID:     meta.PageID,
+		OutputFolder: opts.FolderPath,
+		DatabaseID:   "",
+		Force:        opts.Force,
+		SQLStore:     sqlStore,
+		OutputMode:   mode,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Update metadata timestamp
+	meta.LastSyncedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := WritePageMetadata(opts.FolderPath, meta); err != nil {
+		return nil, fmt.Errorf("write metadata: %w", err)
+	}
+
+	return result, nil
 }
 
 func getPageTitle(page *notion.Page) string {

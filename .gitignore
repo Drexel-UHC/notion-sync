@@ -17,3 +17,4 @@ dist/
 *.swp
 *.swo
 *~
+.mcp.json
