@@ -68,12 +68,10 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 			}
 		}
 
-		// Fall back to SQLite store (needed for sqlite-only mode)
-		if storedEdited == "" && opts.SQLStore != nil {
-			storedEdited = opts.SQLStore.GetPageLastEdited(opts.NotionID)
-		}
-
-		if storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
+		// Only skip if the markdown file confirms the page is unchanged.
+		// SQLite is intentionally NOT consulted — if the .md file is missing,
+		// we always re-fetch to avoid stale SQLite state blocking re-imports.
+		if exists && storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
 			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
 		}
 	}
