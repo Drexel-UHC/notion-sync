@@ -14,6 +14,19 @@ type BlockFetcher interface {
 	FetchAllBlocks(blockID string) ([]notion.Block, error)
 }
 
+// CachedBlockFetcher looks up blocks from a pre-fetched BlockTree.
+type CachedBlockFetcher struct {
+	Tree *notion.BlockTree
+}
+
+// FetchAllBlocks returns cached blocks for a given parent ID.
+func (c *CachedBlockFetcher) FetchAllBlocks(blockID string) ([]notion.Block, error) {
+	if blocks, ok := c.Tree.Children[blockID]; ok {
+		return blocks, nil
+	}
+	return nil, nil
+}
+
 // ConvertContext holds context for block conversion.
 type ConvertContext struct {
 	Client      BlockFetcher

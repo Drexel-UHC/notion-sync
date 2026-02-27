@@ -10,4 +10,5 @@ type NotionClient interface {
 	QueryAllEntries(dataSourceID string) ([]notion.Page, error)
 	GetPage(pageID string) (*notion.Page, error)
 	FetchAllBlocks(blockID string) ([]notion.Block, error)
+	FetchBlockTree(pageID string, progress func(fetched, found int)) (*notion.BlockTree, error)
 }

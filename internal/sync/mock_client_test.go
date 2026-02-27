@@ -65,6 +65,30 @@ func (m *mockNotionClient) FetchAllBlocks(blockID string) ([]notion.Block, error
 	return blocks, nil
 }
 
+func (m *mockNotionClient) FetchBlockTree(pageID string, progress func(fetched, found int)) (*notion.BlockTree, error) {
+	tree := &notion.BlockTree{Children: make(map[string][]notion.Block)}
+	var fetchRecursive func(id string) error
+	fetchRecursive = func(id string) error {
+		blocks, err := m.FetchAllBlocks(id)
+		if err != nil {
+			return err
+		}
+		tree.Children[id] = blocks
+		for _, b := range blocks {
+			if b.HasChildren {
+				if err := fetchRecursive(b.ID); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := fetchRecursive(pageID); err != nil {
+		return nil, err
+	}
+	return tree, nil
+}
+
 // Helper to create a simple test page with a title.
 func testPage(id, title, lastEdited string) notion.Page {
 	return notion.Page{
