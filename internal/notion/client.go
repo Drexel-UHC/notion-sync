@@ -28,32 +28,56 @@ const (
 )
 
 // Client is a Notion API client with rate limiting and retry logic.
+// Rate limiting allows multiple requests in-flight simultaneously
+// while ensuring new requests are only started ~3 per second.
 type Client struct {
-	apiKey          string
-	httpClient      *http.Client
-	mu              sync.Mutex
-	lastRequestTime time.Time
+	apiKey     string
+	httpClient *http.Client
+	rateCh     chan struct{} // ticker-based rate limiter
+	stopRate   chan struct{} // signal to stop the rate limiter
 }
 
 // NewClient creates a new Notion API client.
 func NewClient(apiKey string) *Client {
-	return &Client{
+	c := &Client{
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 60 * time.Second},
+		rateCh:     make(chan struct{}, 1),
+		stopRate:   make(chan struct{}),
+	}
+	// Start rate limiter: emit one token every 340ms (~3 req/sec).
+	// Multiple requests can be in-flight, but new ones only start at this rate.
+	go func() {
+		ticker := time.NewTicker(time.Duration(minRequestIntervalMs) * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				select {
+				case c.rateCh <- struct{}{}:
+				default: // don't accumulate tokens
+				}
+			case <-c.stopRate:
+				return
+			}
+		}
+	}()
+	return c
+}
+
+// Close stops the rate limiter goroutine.
+func (c *Client) Close() {
+	select {
+	case <-c.stopRate:
+	default:
+		close(c.stopRate)
 	}
 }
 
-// throttle ensures minimum interval between requests.
+// throttle waits for the next rate limiter token before starting a request.
+// Multiple goroutines can wait concurrently; each proceeds as a token arrives.
 func (c *Client) throttle() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	elapsed := time.Since(c.lastRequestTime)
-	minInterval := time.Duration(minRequestIntervalMs) * time.Millisecond
-	if elapsed < minInterval {
-		time.Sleep(minInterval - elapsed)
-	}
-	c.lastRequestTime = time.Now()
+	<-c.rateCh
 }
 
 // request makes an HTTP request with retry logic.
@@ -250,6 +274,83 @@ func (c *Client) FetchAllBlocks(blockID string) ([]Block, error) {
 	}
 
 	return blocks, nil
+}
+
+// BlockTree holds all blocks for a page, keyed by parent block ID.
+type BlockTree struct {
+	Children map[string][]Block // parentID → children
+}
+
+// FetchBlockTree recursively fetches the entire block tree for a page,
+// using concurrent requests (up to 3 at a time) for child blocks.
+// Reports progress via the optional callback: (fetchedCount, foundCount).
+func (c *Client) FetchBlockTree(pageID string, progress func(fetched, found int)) (*BlockTree, error) {
+	tree := &BlockTree{
+		Children: make(map[string][]Block),
+	}
+
+	var mu sync.Mutex
+	var fetched int
+	found := 1 // start with 1 for the root
+
+	report := func() {
+		if progress != nil {
+			mu.Lock()
+			progress(fetched, found)
+			mu.Unlock()
+		}
+	}
+
+	var fetchErr error
+	var errOnce sync.Once
+
+	var wg sync.WaitGroup
+
+	var fetchRecursive func(blockID string)
+	fetchRecursive = func(blockID string) {
+		defer wg.Done()
+
+		blocks, err := c.FetchAllBlocks(blockID)
+
+		if err != nil {
+			errOnce.Do(func() { fetchErr = err })
+			return
+		}
+
+		mu.Lock()
+		tree.Children[blockID] = blocks
+		fetched++
+
+		// Count new children that need fetching
+		childCount := 0
+		for _, b := range blocks {
+			if b.HasChildren {
+				childCount++
+			}
+		}
+		found += childCount
+		mu.Unlock()
+
+		report()
+
+		// Recurse into children concurrently
+		for _, b := range blocks {
+			if b.HasChildren {
+				wg.Add(1)
+				go fetchRecursive(b.ID)
+			}
+		}
+	}
+
+	wg.Add(1)
+	go fetchRecursive(pageID)
+	wg.Wait()
+
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+
+	return tree, nil
 }
 
 // QueryAllEntries queries all entries from a data source (handling pagination).
