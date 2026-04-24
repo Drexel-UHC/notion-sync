@@ -79,7 +79,7 @@ FreshDatabaseImport() or RefreshDatabase()
 Each synced database folder contains `_database.json`:
 
 ```json
-{ "databaseId": "...", "title": "...", "url": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N }
+{ "databaseId": "...", "title": "...", "url": "...", "folderPath": "...", "lastSyncedAt": "...", "entryCount": N, "syncVersion": "v0.4.0" }
 ```
 
 ### Progress Phases
