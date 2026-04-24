@@ -84,21 +84,3 @@ func TestGetConfigPath_XDG(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_OutputMode(t *testing.T) {
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "notion-sync"), 0755)
-	configPath := filepath.Join(dir, "notion-sync", "config.json")
-	data, _ := json.Marshal(map[string]string{"outputMode": "sqlite"})
-	os.WriteFile(configPath, data, 0600)
-
-	t.Setenv("XDG_CONFIG_HOME", dir)
-	t.Setenv("NOTION_SYNC_API_KEY", "")
-
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.OutputMode != "sqlite" {
-		t.Errorf("OutputMode = %q, want sqlite", cfg.OutputMode)
-	}
-}

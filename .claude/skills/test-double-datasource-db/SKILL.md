@@ -1,7 +1,7 @@
 ---
 name: test-double-datasource-db
-description: Run integration test against the double-data-source test database (multi-source import, subfolder layout, SQLite, edge cases)
-version: 1.0.0
+description: Run integration test against the double-data-source test database (multi-source import, subfolder layout, edge cases)
+version: 2.0.0
 args: "[--verbose] [--no-cleanup]"
 ---
 
@@ -19,7 +19,7 @@ Check if `--verbose` was passed in the skill args.
 
 - **Default (concise):** Run all steps automatically without asking questions. Print a one-line status per step as you go (e.g., `Step 1: Build... done`). At the end, print the summary table and pass/fail result. Do NOT use `AskUserQuestion` at all.
 - **Verbose (`--verbose`):** Interactive mode. Use `AskUserQuestion` with selectable options before every command. Show exact CLI calls, wait for confirmation. Never jump ahead.
-- **No cleanup (`--no-cleanup`):** Skip Step 14 (delete `test-output/`). The test output is left on disk so you can examine it manually.
+- **No cleanup (`--no-cleanup`):** Skip Step 13 (delete `test-output/`). The test output is left on disk so you can examine it manually.
 
 ## Verbose-Only Interaction Rules
 
@@ -49,7 +49,6 @@ Check that the import produced the correct multi-source directory structure:
 
 ```
 test-output/
-├── _notion_sync.sqlite
 └── test database - double data source/
     ├── _database.json           (top-level, NO dataSourceId)
     ├── Projects/
@@ -67,9 +66,8 @@ Checks:
 4. Each sub-level `_database.json` has a `dataSourceId` field
 5. `Projects/_database.json` entryCount >= 8
 6. `Clients/_database.json` entryCount >= 6
-7. `_notion_sync.sqlite` exists at the `test-output/` root
 
-- **Pass criteria:** All 7 checks pass.
+- **Pass criteria:** All 6 checks pass.
 
 ### Step 4: Verify Projects markdown files
 Check the `.md` files in `Projects/` subfolder:
@@ -113,32 +111,12 @@ Check the `.md` files in `Clients/` subfolder:
 
 - **Pass criteria:** All checks pass.
 
-### Step 6: Verify SQLite database
-Query `_notion_sync.sqlite` at `test-output/` root:
-
-```bash
-sqlite3 test-output/_notion_sync.sqlite "SELECT COUNT(*) FROM pages"
-sqlite3 test-output/_notion_sync.sqlite "SELECT COUNT(DISTINCT database_id) FROM pages"
-sqlite3 test-output/_notion_sync.sqlite "SELECT id, title FROM pages WHERE title = 'Duplicate Name'"
-sqlite3 test-output/_notion_sync.sqlite "SELECT id, title FROM pages WHERE title LIKE 'Edge:%'"
-```
-
-| Check | Expected |
-|-------|----------|
-| Total page count | >= 14 |
-| Distinct database_id count | 1 (all pages share same parent database ID) |
-| "Duplicate Name" rows | Exactly 3 (2 from Projects + 1 from Clients) |
-| Edge case rows | >= 5 (All Nulls, Special, Long, Empty Everything, Numeric-Like) |
-| All pages have non-empty `last_edited_time` | `SELECT COUNT(*) FROM pages WHERE last_edited_time IS NULL OR last_edited_time = ''` = 0 |
-
-- **Pass criteria:** All checks pass.
-
-### Step 7: No-op refresh (top-level)
+### Step 6: No-op refresh (top-level)
 Run refresh on the **parent** folder (not a subfolder) to test multi-source delegation:
 `./notion-sync.exe refresh "./test-output/test database - double data source"`
 - **Pass criteria:** updated = 0, skipped = total (>= 14).
 
-### Step 8: No-op refresh (per-source)
+### Step 7: No-op refresh (per-source)
 Run refresh on each subfolder individually:
 ```
 ./notion-sync.exe refresh "./test-output/test database - double data source/Projects"
@@ -146,35 +124,33 @@ Run refresh on each subfolder individually:
 ```
 - **Pass criteria:** Both return updated = 0, skipped = their respective entry counts.
 
-### Step 9: Make a change via Notion MCP
+### Step 8: Make a change via Notion MCP
 Use Notion MCP tools to edit one page in the **Clients** source (e.g., Delta Corp):
 - Property edit: change `Revenue` to a different value
 - Content edit: append `<!-- double-source-test -->` to ensure timestamp changes
 
-**Remember the original values so you can revert in Step 13.**
+**Remember the original values so you can revert in Step 12.**
 
-### Step 10: Incremental refresh (top-level)
+### Step 9: Incremental refresh (top-level)
 Run: `./notion-sync.exe refresh "./test-output/test database - double data source"`
 - **Pass criteria:** updated = 1 (Delta Corp), skipped = total - 1.
 
-### Step 11: Force refresh (top-level)
+### Step 10: Force refresh (top-level)
 Run: `./notion-sync.exe refresh "./test-output/test database - double data source" --force`
 - **Pass criteria:** updated = total (>= 14), skipped = 0.
 
-### Step 12: Verify file mtime preservation
+### Step 11: Verify file mtime preservation
 For each synced `.md` file in both `Projects/` and `Clients/`, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
 - **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
 
-### Step 13: Revert Notion changes
-Use Notion MCP tools to restore the page edited in Step 9 back to its original property values and content. This keeps the test database clean for the next run.
+### Step 12: Revert Notion changes
+Use Notion MCP tools to restore the page edited in Step 8 back to its original property values and content. This keeps the test database clean for the next run.
 
-### Step 14: Clean up
-If `--no-cleanup` was passed, **skip this step** and print `Step 14: Skipped (--no-cleanup)`.
+### Step 13: Clean up
+If `--no-cleanup` was passed, **skip this step** and print `Step 13: Skipped (--no-cleanup)`.
 Otherwise:
 1. Delete only `test-output/test database - double data source/` (not the entire `test-output/` directory).
-2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.sqlite` where `database_id` matches this test's database ID (`c9aa5ab2-b470-429c-ba9c-86c853782bb2`). Use Python or Go to run the SQL.
-3. If `_notion_sync.sqlite` has zero rows remaining in `pages`, delete the `.sqlite` file entirely.
-4. If `test-output/` is now empty, delete it.
+2. If `test-output/` is now empty, delete it.
 
 ## Done
 Summarize all step results in a table with columns: Step | Action | Result.
@@ -182,12 +158,12 @@ Summarize all step results in a table with columns: Step | Action | Result.
 If all steps passed, output:
 
 ```
-✅ ALL TESTS PASSED
+ALL TESTS PASSED
 ```
 
 If any steps failed, output:
 
 ```
-❌ TESTS FAILED
+TESTS FAILED
 ```
 followed by a bullet list of each failed step and what went wrong.

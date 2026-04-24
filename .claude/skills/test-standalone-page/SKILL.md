@@ -1,7 +1,7 @@
 ---
 name: test-standalone-page
 description: Run integration test for standalone page import/refresh/list
-version: 1.0.0
+version: 2.0.0
 args: "[--verbose] [--no-cleanup]"
 ---
 
@@ -18,7 +18,7 @@ Check if `--verbose` was passed in the skill args.
 
 - **Default (concise):** Run all steps automatically without asking questions. Print a one-line status per step as you go (e.g., `Step 1: Clean slate... done`). At the end, print the summary table and pass/fail result. Do NOT use `AskUserQuestion` at all.
 - **Verbose (`--verbose`):** Interactive mode. Use `AskUserQuestion` with selectable options before every command. Show exact CLI calls, wait for confirmation, and provide detailed output after each action. Never jump ahead.
-- **No cleanup (`--no-cleanup`):** Skip Step 8 (cleanup). The test output is left on disk so you can examine it manually.
+- **No cleanup (`--no-cleanup`):** Skip Step 7 (cleanup). The test output is left on disk so you can examine it manually.
 
 ## Verbose-Only Interaction Rules
 
@@ -65,19 +65,11 @@ Run: `./notion-sync.exe refresh "test-output/pages/Test - Notion sync - single p
 Run: `./notion-sync.exe list ./test-output`
 - **Pass criteria:** Output contains `Test - Notion sync - single page` in the "Synced pages" section with the correct page ID.
 
-### Step 7: SQLite check
-Query `test-output/_notion_sync.sqlite`:
-```sql
-SELECT id, title, database_id FROM pages WHERE id = '31357008-e885-80c3-90f4-d148f0854bba';
-```
-- **Pass criteria:** Row exists, `database_id` is empty string or NULL, title matches.
-
-### Step 8: Clean up
-If `--no-cleanup` was passed, **skip this step** and print `Step 8: Skipped (--no-cleanup)`.
+### Step 7: Clean up
+If `--no-cleanup` was passed, **skip this step** and print `Step 7: Skipped (--no-cleanup)`.
 Otherwise:
 1. Delete `test-output/pages/` folder.
-2. Clean SQLite: `DELETE FROM pages WHERE id = '31357008-e885-80c3-90f4-d148f0854bba'` using `sqlite3`.
-3. If `test-output/` is now empty, delete it.
+2. If `test-output/` is now empty, delete it.
 
 ## Done
 Summarize all step results in a table with columns: Step | Action | Result.

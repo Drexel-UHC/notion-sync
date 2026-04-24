@@ -66,11 +66,10 @@ notion-sync refresh ./my-notes/Database\ A --force
 notion-sync list ./my-notes
 ```
 
-The `--output` folder is a **workspace**. Each database gets a subfolder, and all databases in a workspace share a single SQLite store:
+The `--output` folder is a **workspace**. Each database gets a subfolder:
 
 ```
 my-notes/                        ← workspace (--output target)
-├── _notion_sync.db              ← shared SQLite store (FTS5 search, all pages)
 ├── Database A/
 │   ├── _database.json
 │   ├── Page One.md
@@ -80,16 +79,6 @@ my-notes/                        ← workspace (--output target)
     ├── Entry Alpha.md
     └── Entry Beta.md
 ```
-
-By default both `.md` files and SQLite are written. Use `--output-mode` to control this:
-
-```sh
-notion-sync import <id> --output ./notes --output-mode markdown  # .md only
-notion-sync import <id> --output ./notes --output-mode sqlite    # SQLite only
-notion-sync import <id> --output ./notes --output-mode both      # default
-```
-
-You can also set the default in config: `notion-sync config set outputMode sqlite`
 
 ## Prerequisites
 
@@ -183,7 +172,6 @@ See [CLAUDE.md](CLAUDE.md) for implementation details, how to add block/property
 | ------------------------------- | ------------------------------ |
 | `github.com/zalando/go-keyring` | OS keychain access             |
 | `gopkg.in/yaml.v3`              | YAML parsing                   |
-| `modernc.org/sqlite`            | Pure-Go SQLite (FTS5, no CGO)  |
 
 No third-party Notion client — uses a thin REST wrapper for full control over rate limiting.
 

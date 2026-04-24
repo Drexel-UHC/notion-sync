@@ -12,7 +12,6 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
-	"github.com/ran-codes/notion-sync/internal/store"
 	"github.com/ran-codes/notion-sync/internal/util"
 )
 
@@ -21,38 +20,14 @@ type DatabaseImportOptions struct {
 	Client       NotionClient
 	DatabaseID   string
 	OutputFolder string
-	OutputMode   OutputMode // "both" (default), "markdown", or "sqlite"
 }
 
 // RefreshOptions contains options for refreshing a database.
 type RefreshOptions struct {
 	Client     NotionClient
 	FolderPath string
-	Force      bool       // Skip timestamp comparison and resync all entries
-	PageIDs    []string   // If set, only refresh these specific page IDs
-	OutputMode OutputMode // "both" (default), "markdown", or "sqlite"
-}
-
-// resolveOutputMode returns the effective output mode, defaulting to "both".
-func resolveOutputMode(mode OutputMode) OutputMode {
-	if mode == "" {
-		return OutputBoth
-	}
-	return mode
-}
-
-// openStoreIfNeeded opens a SQLite store at workspacePath if the output mode includes SQLite.
-// Returns nil (no error) if mode is markdown-only or if the store fails to open (warns to stderr).
-func openStoreIfNeeded(mode OutputMode, workspacePath string) *store.Store {
-	if mode == OutputMarkdown {
-		return nil
-	}
-	s, err := store.OpenStore(workspacePath)
-	if err != nil {
-		log.Printf("warning: SQLite store failed to open, continuing without it: %v", err)
-		return nil
-	}
-	return s
+	Force      bool     // Skip timestamp comparison and resync all entries
+	PageIDs    []string // If set, only refresh these specific page IDs
 }
 
 // dataSourceInfo holds resolved info for a single data source to import.
@@ -124,13 +99,6 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		return nil, fmt.Errorf("create folder: %w", err)
 	}
 
-	// Open SQLite store at workspace root (OutputFolder, not database subfolder)
-	mode := resolveOutputMode(opts.OutputMode)
-	sqlStore := openStoreIfNeeded(mode, opts.OutputFolder)
-	if sqlStore != nil {
-		defer sqlStore.Close()
-	}
-
 	// Resolve data sources and folder layout
 	sources, err := resolveDataSources(opts.Client, database, dbTitle, folderPath)
 	if err != nil {
@@ -154,7 +122,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		}
 		fileNameMap := buildFileNameMap(entries)
 		countBefore := result.Total
-		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, mode, sqlStore, result, src.Title, onProgress, fileNameMap)
+		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, result, src.Title, onProgress, fileNameMap)
 
 		// Write per-source metadata for multi-source databases
 		if len(sources) > 1 {
@@ -240,8 +208,6 @@ func importEntries(
 	client NotionClient,
 	entries []notion.Page,
 	folderPath, databaseID string,
-	mode OutputMode,
-	sqlStore *store.Store,
 	result *DatabaseFreezeResult,
 	title string,
 	onProgress ProgressCallback,
@@ -266,8 +232,6 @@ func importEntries(
 			OutputFolder:     folderPath,
 			DatabaseID:       databaseID,
 			Page:             &entry,
-			SQLStore:         sqlStore,
-			OutputMode:       mode,
 			OverrideFileName: fileNameMap[entry.ID],
 		})
 
@@ -312,17 +276,11 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 	}
 
-	// Open SQLite store at workspace root (parent of database folder)
-	mode := resolveOutputMode(opts.OutputMode)
 	workspacePath := filepath.Dir(opts.FolderPath)
-	sqlStore := openStoreIfNeeded(mode, workspacePath)
 
 	// Ensure CLAUDE.md exists at workspace root (backfill for older imports)
 	if err := WriteClaudeMD(workspacePath); err != nil {
 		log.Printf("warning: failed to write CLAUDE.md: %v", err)
-	}
-	if sqlStore != nil {
-		defer sqlStore.Close()
 	}
 
 	// --ids mode: fetch only specific pages, skip full query/diff/delete
@@ -351,8 +309,6 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 				OutputFolder: opts.FolderPath,
 				DatabaseID:   databaseID,
 				Force:        true,
-				SQLStore:     sqlStore,
-				OutputMode:   mode,
 			})
 
 			if err != nil {
@@ -476,8 +432,6 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 			DatabaseID:       databaseID,
 			Page:             &entry,
 			Force:            opts.Force,
-			SQLStore:         sqlStore,
-			OutputMode:       mode,
 			OverrideFileName: fileNameMap[entry.ID],
 		})
 
@@ -500,13 +454,11 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	// Clean up orphaned files from filename disambiguation.
 	// If a page was previously saved as "Title.md" but now needs "Title-{id}.md",
 	// remove the old file to avoid duplicates.
-	if mode != OutputSQLite {
-		for id, info := range localFiles {
-			if override, ok := fileNameMap[id]; ok {
-				newPath := filepath.Join(opts.FolderPath, override+".md")
-				if info.filePath != newPath {
-					os.Remove(info.filePath)
-				}
+	for id, info := range localFiles {
+		if override, ok := fileNameMap[id]; ok {
+			newPath := filepath.Join(opts.FolderPath, override+".md")
+			if info.filePath != newPath {
+				os.Remove(info.filePath)
 			}
 		}
 	}
@@ -514,41 +466,8 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	// Mark deleted entries (from filesystem scan)
 	for id, info := range localFiles {
 		if !allEntryIDs[id] {
-			marked := false
-			if mode != OutputSQLite {
-				if err := markAsDeleted(info.filePath); err == nil {
-					marked = true
-				}
-			}
-			if sqlStore != nil {
-				if err := sqlStore.MarkDeleted(id); err != nil {
-					log.Printf("warning: SQLite mark-deleted %s: %v", id, err)
-				} else {
-					marked = true
-				}
-			}
-			if marked {
+			if err := markAsDeleted(info.filePath); err == nil {
 				result.Deleted++
-			}
-		}
-	}
-
-	// In sqlite-only mode, also check SQLite store for pages that no longer exist in Notion
-	if mode == OutputSQLite && sqlStore != nil {
-		storedPages, err := sqlStore.GetPagesByDatabase(databaseID)
-		if err != nil {
-			log.Printf("warning: query stored pages for delete check: %v", err)
-		} else {
-			for _, sp := range storedPages {
-				if !allEntryIDs[sp.ID] {
-					if _, inLocal := localFiles[sp.ID]; !inLocal {
-						if err := sqlStore.MarkDeleted(sp.ID); err != nil {
-							log.Printf("warning: SQLite mark-deleted %s: %v", sp.ID, err)
-						} else {
-							result.Deleted++
-						}
-					}
-				}
 			}
 		}
 	}
@@ -675,7 +594,6 @@ func refreshMultiSource(opts RefreshOptions, subFolders []string, parentMeta *Fr
 			FolderPath: subFolder,
 			Force:      opts.Force,
 			PageIDs:    opts.PageIDs,
-			OutputMode: opts.OutputMode,
 		}
 		subResult, err := RefreshDatabase(subOpts, onProgress)
 		if err != nil {

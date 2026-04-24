@@ -1,7 +1,7 @@
 ---
 name: test-single-datasource-db
 description: Run integration test against the single-data-source test database (import, refresh, --ids, --force)
-version: 1.7.0
+version: 2.0.0
 args: "[--verbose] [--no-cleanup]"
 ---
 
@@ -59,7 +59,7 @@ Run: `./notion-sync.exe refresh "./test-output/test database obsdiain complex"`
 ### Step 4: Make a change via Notion MCP
 Use the Notion MCP tools to make **both** a property edit **and** a content edit to one of the pages. Property-only edits may not bump Notion's `last_edited_time`, so you must also edit the page content (e.g., append `<!-- sync-test -->`) to ensure the timestamp changes.
 
-**Remember the original values so you can revert in Step 10.**
+**Remember the original values so you can revert in Step 9.**
 
 ### Step 5: Incremental refresh
 Run: `./notion-sync.exe refresh "./test-output/test database obsdiain complex"`
@@ -89,28 +89,14 @@ Grep the synced `.md` files in `./test-output/test database obsdiain complex/` f
 For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
 - **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
 
-### Step 10: Verify SQLite database
-Query `_notion_sync.sqlite` at `test-output/` root using `sqlite3` (read-only):
-
-| Check | Expected |
-|-------|----------|
-| Total page count for this database | 12 (`SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0'`) |
-| All pages have non-empty `body_markdown` | `SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0' AND (body_markdown IS NULL OR body_markdown = '')` = 0 |
-| All pages have non-empty `last_edited_time` | `SELECT COUNT(*) FROM pages WHERE database_id = '2fe57008-e885-8003-b1f3-cc05981dc6b0' AND (last_edited_time IS NULL OR last_edited_time = '')` = 0 |
-| FTS index has entries | `SELECT COUNT(*) FROM pages_fts` >= 12 |
-
-- **Pass criteria:** All checks pass.
-
-### Step 11: Revert Notion changes
+### Step 10: Revert Notion changes
 Use Notion MCP tools to restore the page edited in Step 4 back to its original property values and content. This keeps the test database clean for the next run.
 
-### Step 12: Clean up
-If `--no-cleanup` was passed, **skip this step** and print `Step 12: Skipped (--no-cleanup)`.
+### Step 11: Clean up
+If `--no-cleanup` was passed, **skip this step** and print `Step 11: Skipped (--no-cleanup)`.
 Otherwise:
 1. Delete only `test-output/test database obsdiain complex/` (not the entire `test-output/` directory).
-2. Clean SQLite: delete rows from `pages` table in `test-output/_notion_sync.sqlite` where `database_id` matches this test's database ID (`2fe57008-e885-8003-b1f3-cc05981dc6b0`). Use Python or Go to run the SQL.
-3. If `_notion_sync.sqlite` has zero rows remaining in `pages`, delete the `.sqlite` file entirely.
-4. If `test-output/` is now empty, delete it.
+2. If `test-output/` is now empty, delete it.
 
 ## Done
 Summarize all step results in a table with columns: Step | Action | Result.
@@ -118,12 +104,12 @@ Summarize all step results in a table with columns: Step | Action | Result.
 If all steps passed, output:
 
 ```
-✅ ALL TESTS PASSED
+ALL TESTS PASSED
 ```
 
 If any steps failed, output:
 
 ```
-❌ TESTS FAILED
+TESTS FAILED
 ```
 followed by a bullet list of each failed step and what went wrong.
