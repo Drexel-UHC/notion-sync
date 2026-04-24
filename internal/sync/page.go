@@ -11,7 +11,6 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
-	"github.com/ran-codes/notion-sync/internal/store"
 	"github.com/ran-codes/notion-sync/internal/util"
 )
 
@@ -23,8 +22,6 @@ type FreezePageOptions struct {
 	DatabaseID       string
 	Page             *notion.Page // Pre-fetched page (optional)
 	Force            bool         // Skip timestamp check and always re-freeze
-	SQLStore         *store.Store // SQLite store (nil = skip SQLite writes)
-	OutputMode       OutputMode   // Controls markdown vs sqlite output
 	OverrideFileName string       // If set, use this instead of computing from title (without .md extension)
 }
 
@@ -55,7 +52,6 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	if !opts.Force {
 		var storedEdited string
 
-		// Try markdown file first (for both/markdown modes)
 		if exists {
 			content, err := os.ReadFile(filePath)
 			if err == nil {
@@ -68,9 +64,6 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 			}
 		}
 
-		// Only skip if the markdown file confirms the page is unchanged.
-		// SQLite is intentionally NOT consulted — if the .md file is missing,
-		// we always re-fetch to avoid stale SQLite state blocking re-imports.
 		if exists && storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
 			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
 		}
@@ -126,52 +119,16 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	content := frontmatter.BuildOrdered(fm, keyOrder, md)
 
-	mode := opts.OutputMode
-	if mode == "" {
-		mode = OutputBoth
+	// Write markdown file
+	if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
+		return nil, fmt.Errorf("create output folder: %w", err)
 	}
-
-	// Write markdown file (unless sqlite-only mode)
-	if mode != OutputSQLite {
-		if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {
-			return nil, fmt.Errorf("create output folder: %w", err)
-		}
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-			return nil, fmt.Errorf("write file: %w", err)
-		}
-		// Preserve file mtime from Notion's last_edited_time
-		if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
-			os.Chtimes(filePath, lastEdited, lastEdited)
-		}
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
 	}
-
-	// Write to SQLite store (warnings only, never blocks markdown sync)
-	if opts.SQLStore != nil {
-		frozenAt := time.Now().UTC().Format(time.RFC3339)
-		propsJSON, err := store.SerializeProperties(fm)
-		if err != nil {
-			log.Printf("warning: serialize properties for %s: %v", opts.NotionID, err)
-			propsJSON = "{}"
-		}
-		// Only store file_path if a markdown file was actually written
-		storedFilePath := ""
-		if mode != OutputSQLite {
-			storedFilePath = filePath
-		}
-		if err := opts.SQLStore.UpsertPage(store.PageData{
-			ID:             opts.NotionID,
-			Title:          title,
-			URL:            page.URL,
-			FilePath:       storedFilePath,
-			BodyMarkdown:   md,
-			PropertiesJSON: propsJSON,
-			CreatedTime:    formatTimeIfNotZero(page.CreatedTime),
-			LastEditedTime: page.LastEditedTime,
-			FrozenAt:       frozenAt,
-			DatabaseID:     opts.DatabaseID,
-		}); err != nil {
-			log.Printf("warning: SQLite upsert %s: %v", opts.NotionID, err)
-		}
+	// Preserve file mtime from Notion's last_edited_time
+	if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
+		os.Chtimes(filePath, lastEdited, lastEdited)
 	}
 
 	status := "created"
@@ -187,7 +144,6 @@ type StandalonePageImportOptions struct {
 	Client       NotionClient
 	PageID       string
 	OutputFolder string
-	OutputMode   OutputMode
 }
 
 // FreezeStandalonePage imports a standalone Notion page (not a database entry).
@@ -216,21 +172,12 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 		return nil, fmt.Errorf("create folder: %w", err)
 	}
 
-	// Open SQLite store at workspace root
-	mode := resolveOutputMode(opts.OutputMode)
-	sqlStore := openStoreIfNeeded(mode, opts.OutputFolder)
-	if sqlStore != nil {
-		defer sqlStore.Close()
-	}
-
 	result, err := FreezePage(FreezePageOptions{
 		Client:       opts.Client,
 		NotionID:     opts.PageID,
 		OutputFolder: folderPath,
 		DatabaseID:   "", // standalone page — no database
 		Page:         page,
-		SQLStore:     sqlStore,
-		OutputMode:   mode,
 	})
 	if err != nil {
 		return nil, err
@@ -262,7 +209,6 @@ type RefreshStandalonePageOptions struct {
 	Client     NotionClient
 	FolderPath string
 	Force      bool
-	OutputMode OutputMode
 }
 
 // RefreshStandalonePage refreshes a previously imported standalone page.
@@ -275,12 +221,7 @@ func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult
 		return nil, fmt.Errorf("no %s found in %s", PageMetadataFile, opts.FolderPath)
 	}
 
-	mode := resolveOutputMode(opts.OutputMode)
 	workspacePath := filepath.Dir(filepath.Dir(opts.FolderPath)) // pages/<folder> → workspace
-	sqlStore := openStoreIfNeeded(mode, workspacePath)
-	if sqlStore != nil {
-		defer sqlStore.Close()
-	}
 
 	// Backfill CLAUDE.md at workspace root
 	if err := WriteClaudeMD(workspacePath); err != nil {
@@ -293,8 +234,6 @@ func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult
 		OutputFolder: opts.FolderPath,
 		DatabaseID:   "",
 		Force:        opts.Force,
-		SQLStore:     sqlStore,
-		OutputMode:   mode,
 	})
 	if err != nil {
 		return nil, err
@@ -478,13 +417,6 @@ func getUserName(p *notion.Person) string {
 		return *p.Name
 	}
 	return p.ID
-}
-
-func formatTimeIfNotZero(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.Format(time.RFC3339)
 }
 
 func fileExists(path string) bool {

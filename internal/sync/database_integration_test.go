@@ -179,7 +179,6 @@ func TestRefreshDatabase_DeletionDetection(t *testing.T) {
 	result, err := RefreshDatabase(RefreshOptions{
 		Client:     mock,
 		FolderPath: dbFolder,
-		OutputMode: OutputMarkdown,
 	}, nil)
 	if err != nil {
 		t.Fatalf("RefreshDatabase: %v", err)
@@ -277,7 +276,6 @@ func TestRefreshMultiSource_Aggregation(t *testing.T) {
 	result, err := RefreshDatabase(RefreshOptions{
 		Client:     mock,
 		FolderPath: dbFolder,
-		OutputMode: OutputMarkdown,
 	}, nil)
 	if err != nil {
 		t.Fatalf("RefreshDatabase: %v", err)
@@ -292,9 +290,9 @@ func TestRefreshMultiSource_Aggregation(t *testing.T) {
 	}
 }
 
-// --- Phase 5a: Output mode tests ---
+// --- Phase 5a: Markdown import test ---
 
-func TestFreshImport_MarkdownOnly(t *testing.T) {
+func TestFreshImport_Markdown(t *testing.T) {
 	dir := t.TempDir()
 	mock := newMockClient()
 	dbID := "db-md-only"
@@ -322,7 +320,6 @@ func TestFreshImport_MarkdownOnly(t *testing.T) {
 		Client:       mock,
 		DatabaseID:   dbID,
 		OutputFolder: dir,
-		OutputMode:   OutputMarkdown,
 	}, nil)
 	if err != nil {
 		t.Fatalf("FreshDatabaseImport: %v", err)
@@ -335,110 +332,6 @@ func TestFreshImport_MarkdownOnly(t *testing.T) {
 	mdPath := filepath.Join(dir, "MarkdownDB", "TestPage.md")
 	if _, err := os.Stat(mdPath); os.IsNotExist(err) {
 		t.Error("expected .md file to exist")
-	}
-
-	// No .db file should exist (markdown-only mode)
-	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Error("expected no _notion_sync.sqlite in markdown-only mode")
-	}
-}
-
-func TestFreshImport_SQLiteOnly(t *testing.T) {
-	dir := t.TempDir()
-	mock := newMockClient()
-	dbID := "db-sql-only"
-	dsID := "ds-sql-only"
-
-	mock.databases[dbID] = &notion.Database{
-		ID:    dbID,
-		URL:   "https://notion.so/" + dbID,
-		Title: []notion.RichText{{Type: "text", PlainText: "SQLiteDB", Text: &notion.TextContent{Content: "SQLiteDB"}}},
-		DataSources: []notion.DataSource{
-			{ID: dsID, Type: "default"},
-		},
-	}
-	mock.dataSources[dsID] = &notion.DataSourceDetail{ID: dsID}
-	mock.entries[dsID] = []notion.Page{
-		testPage("p1", "TestPage", "2025-01-01T00:00:00Z"),
-	}
-	mock.blocks["p1"] = []notion.Block{
-		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
-			RichText: []notion.RichText{{Type: "text", PlainText: "Hello", Text: &notion.TextContent{Content: "Hello"}}},
-		}},
-	}
-
-	result, err := FreshDatabaseImport(DatabaseImportOptions{
-		Client:       mock,
-		DatabaseID:   dbID,
-		OutputFolder: dir,
-		OutputMode:   OutputSQLite,
-	}, nil)
-	if err != nil {
-		t.Fatalf("FreshDatabaseImport: %v", err)
-	}
-	if result.Created != 1 {
-		t.Errorf("Created = %d, want 1", result.Created)
-	}
-
-	// No .md file should exist (sqlite-only mode)
-	mdPath := filepath.Join(dir, "SQLiteDB", "TestPage.md")
-	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
-		t.Error("expected no .md file in sqlite-only mode")
-	}
-
-	// .db file should exist
-	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Error("expected _notion_sync.sqlite to exist in sqlite mode")
-	}
-}
-
-func TestFreshImport_BothMode(t *testing.T) {
-	dir := t.TempDir()
-	mock := newMockClient()
-	dbID := "db-both"
-	dsID := "ds-both"
-
-	mock.databases[dbID] = &notion.Database{
-		ID:    dbID,
-		URL:   "https://notion.so/" + dbID,
-		Title: []notion.RichText{{Type: "text", PlainText: "BothDB", Text: &notion.TextContent{Content: "BothDB"}}},
-		DataSources: []notion.DataSource{
-			{ID: dsID, Type: "default"},
-		},
-	}
-	mock.dataSources[dsID] = &notion.DataSourceDetail{ID: dsID}
-	mock.entries[dsID] = []notion.Page{
-		testPage("p1", "TestPage", "2025-01-01T00:00:00Z"),
-	}
-	mock.blocks["p1"] = []notion.Block{
-		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
-			RichText: []notion.RichText{{Type: "text", PlainText: "Hello", Text: &notion.TextContent{Content: "Hello"}}},
-		}},
-	}
-
-	result, err := FreshDatabaseImport(DatabaseImportOptions{
-		Client:       mock,
-		DatabaseID:   dbID,
-		OutputFolder: dir,
-		OutputMode:   OutputBoth,
-	}, nil)
-	if err != nil {
-		t.Fatalf("FreshDatabaseImport: %v", err)
-	}
-	if result.Created != 1 {
-		t.Errorf("Created = %d, want 1", result.Created)
-	}
-
-	// Both .md and .db should exist
-	mdPath := filepath.Join(dir, "BothDB", "TestPage.md")
-	if _, err := os.Stat(mdPath); os.IsNotExist(err) {
-		t.Error("expected .md file to exist in both mode")
-	}
-	dbPath := filepath.Join(dir, "_notion_sync.sqlite")
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Error("expected _notion_sync.sqlite to exist in both mode")
 	}
 }
 
@@ -474,7 +367,6 @@ func TestFreshImport_DuplicateTitles(t *testing.T) {
 		Client:       mock,
 		DatabaseID:   dbID,
 		OutputFolder: dir,
-		OutputMode:   OutputMarkdown,
 	}, nil)
 	if err != nil {
 		t.Fatalf("FreshDatabaseImport: %v", err)
@@ -584,7 +476,6 @@ func TestRefresh_DuplicateTitleRename(t *testing.T) {
 		Client:     mock,
 		FolderPath: dbFolder,
 		Force:      true,
-		OutputMode: OutputMarkdown,
 	}, nil)
 	if err != nil {
 		t.Fatalf("RefreshDatabase: %v", err)

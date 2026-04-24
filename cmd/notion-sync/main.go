@@ -55,8 +55,8 @@ func reorderArgs(args []string) []string {
 var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + version + `)
 
 Usage:
-  notion-sync import <database-or-page-id> [--output <folder>] [--output-mode both|markdown|sqlite] [--api-key <key>]
-  notion-sync refresh <folder> [--ids id1,id2] [--force] [--output-mode both|markdown|sqlite] [--api-key <key>]
+  notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>]
+  notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync config set <key> <value>
 
@@ -67,7 +67,7 @@ Commands:
             --ids id1,id2  Refresh only specific pages by ID (databases only)
             --force, -f    Resync all entries, ignoring timestamps
   list      List all synced databases and pages in a folder
-  config    Manage configuration (apiKey, defaultOutputFolder, outputMode)
+  config    Manage configuration (apiKey, defaultOutputFolder)
 
 Examples:
   notion-sync import abc123de-f456-7890-abcd-ef1234567890 --output ./my-notes
@@ -138,7 +138,6 @@ func runImport(args []string) error {
 	outputAlt := fs.String("out", "", "Output folder (alias)")
 	output2 := fs.String("o", "", "Output folder (shorthand)")
 	apiKey := fs.String("api-key", "", "Notion API key")
-	outputMode := fs.String("output-mode", "", "Output mode: both, markdown, sqlite (default: both)")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -181,16 +180,11 @@ func runImport(args []string) error {
 
 	client := notion.NewClient(key)
 
-	mode, err := resolveOutputModeFlag(*outputMode, cfg)
-	if err != nil {
-		return err
-	}
-
 	// Auto-detect: try database first, fall back to page
 	_, dbErr := client.GetDatabase(notionID)
 	if dbErr != nil && notion.IsNotFoundError(dbErr) {
 		// Not a database — try as a standalone page
-		return runImportPage(client, notionID, outputFolder, mode)
+		return runImportPage(client, notionID, outputFolder)
 	}
 	if dbErr != nil {
 		return fmt.Errorf("fetch database: %w", dbErr)
@@ -204,7 +198,6 @@ func runImport(args []string) error {
 		Client:       client,
 		DatabaseID:   notionID,
 		OutputFolder: outputFolder,
-		OutputMode:   mode,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhaseImporting {
 			dbTitle = p.Title
@@ -235,7 +228,7 @@ func runImport(args []string) error {
 	return nil
 }
 
-func runImportPage(client *notion.Client, pageID, outputFolder string, mode sync.OutputMode) error {
+func runImportPage(client *notion.Client, pageID, outputFolder string) error {
 	fmt.Println("Importing standalone page...")
 	fmt.Println("Note: Pages with deeply nested content (bullet points, toggles, callouts)")
 	fmt.Println("      require one API call per nesting level. Notion limits ~3 requests/sec.")
@@ -244,7 +237,6 @@ func runImportPage(client *notion.Client, pageID, outputFolder string, mode sync
 		Client:       client,
 		PageID:       pageID,
 		OutputFolder: outputFolder,
-		OutputMode:   mode,
 	})
 	if err != nil {
 		return err
@@ -265,7 +257,6 @@ func runRefresh(args []string) error {
 	force := fs.Bool("force", false, "Resync all entries, ignoring timestamps")
 	forceShort := fs.Bool("f", false, "Resync all entries (shorthand)")
 	ids := fs.String("ids", "", "Comma-separated Notion page IDs to refresh")
-	outputMode := fs.String("output-mode", "", "Output mode: both, markdown, sqlite (default: both)")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -311,15 +302,10 @@ func runRefresh(args []string) error {
 
 	client := notion.NewClient(key)
 
-	mode, err := resolveOutputModeFlag(*outputMode, cfg)
-	if err != nil {
-		return err
-	}
-
 	// Check if the folder is a standalone page (has _page.json)
 	pageMeta, _ := sync.ReadPageMetadata(folderPath)
 	if pageMeta != nil {
-		return runRefreshPage(client, folderPath, forceRefresh, mode)
+		return runRefreshPage(client, folderPath, forceRefresh)
 	}
 
 	if len(pageIDs) > 0 {
@@ -336,7 +322,6 @@ func runRefresh(args []string) error {
 		FolderPath: folderPath,
 		Force:      forceRefresh,
 		PageIDs:    pageIDs,
-		OutputMode: mode,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhaseImporting {
 			dbTitle = p.Title
@@ -367,7 +352,7 @@ func runRefresh(args []string) error {
 	return nil
 }
 
-func runRefreshPage(client *notion.Client, folderPath string, force bool, mode sync.OutputMode) error {
+func runRefreshPage(client *notion.Client, folderPath string, force bool) error {
 	if force {
 		fmt.Println("Force refreshing page (ignoring timestamps)...")
 	} else {
@@ -378,7 +363,6 @@ func runRefreshPage(client *notion.Client, folderPath string, force bool, mode s
 		Client:     client,
 		FolderPath: folderPath,
 		Force:      force,
-		OutputMode: mode,
 	})
 	if err != nil {
 		return err
@@ -445,7 +429,7 @@ func runConfig(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: notion-sync config get [key]\n" +
 			"       notion-sync config set <key> <value>\n" +
-			"Keys: apiKey, defaultOutputFolder, outputMode")
+			"Keys: apiKey, defaultOutputFolder")
 	}
 
 	if args[0] == "get" {
@@ -455,13 +439,13 @@ func runConfig(args []string) error {
 	if args[0] != "set" || len(args) < 3 {
 		return fmt.Errorf("usage: notion-sync config get [key]\n" +
 			"       notion-sync config set <key> <value>\n" +
-			"Keys: apiKey, defaultOutputFolder, outputMode")
+			"Keys: apiKey, defaultOutputFolder")
 	}
 
 	key := args[1]
 	value := args[2]
 
-	validKeys := []string{"apiKey", "defaultOutputFolder", "outputMode"}
+	validKeys := []string{"apiKey", "defaultOutputFolder"}
 	isValid := false
 	for _, k := range validKeys {
 		if k == key {
@@ -501,12 +485,6 @@ func runConfigGet(args []string) error {
 			printAPIKeyStatus(cfg.APIKey)
 		case "defaultOutputFolder":
 			fmt.Println(cfg.DefaultOutputFolder)
-		case "outputMode":
-			if cfg.OutputMode == "" {
-				fmt.Println("(default: both)")
-			} else {
-				fmt.Println(cfg.OutputMode)
-			}
 		default:
 			return fmt.Errorf("unknown config key: %s", args[0])
 		}
@@ -518,9 +496,6 @@ func runConfigGet(args []string) error {
 	fmt.Printf("  apiKey:              ")
 	printAPIKeyStatus(cfg.APIKey)
 	fmt.Printf("  defaultOutputFolder: %s\n", cfg.DefaultOutputFolder)
-	if cfg.OutputMode != "" {
-		fmt.Printf("  outputMode:          %s\n", cfg.OutputMode)
-	}
 	fmt.Printf("\n  Config file: %s\n", config.GetConfigPath())
 	return nil
 }
@@ -536,23 +511,6 @@ func printAPIKeyStatus(key string) {
 }
 
 // 3. Helpers ----
-
-// resolveOutputModeFlag resolves the output mode from flag > config > default.
-func resolveOutputModeFlag(flagValue string, cfg config.Config) (sync.OutputMode, error) {
-	mode := flagValue
-	if mode == "" {
-		mode = cfg.OutputMode
-	}
-	if mode == "" {
-		return sync.OutputBoth, nil
-	}
-	switch sync.OutputMode(mode) {
-	case sync.OutputBoth, sync.OutputMarkdown, sync.OutputSQLite:
-		return sync.OutputMode(mode), nil
-	default:
-		return "", fmt.Errorf("invalid output-mode %q (valid: both, markdown, sqlite)", mode)
-	}
-}
 
 func formatProgress(p sync.ProgressPhase, dbTitle string) string {
 	switch p.Phase {

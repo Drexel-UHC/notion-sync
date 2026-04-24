@@ -60,12 +60,3 @@ const (
 	PhaseImporting     = "importing"
 	PhaseComplete      = "complete"
 )
-
-// OutputMode controls what outputs are produced during sync.
-type OutputMode string
-
-const (
-	OutputBoth     OutputMode = "both"     // Write markdown files and SQLite (default)
-	OutputMarkdown OutputMode = "markdown" // Write markdown files only
-	OutputSQLite   OutputMode = "sqlite"   // Write SQLite only
-)
