@@ -34,6 +34,10 @@ func ReadDatabaseMetadata(folderPath string) (*FrozenDatabase, error) {
 func WriteDatabaseMetadata(folderPath string, metadata *FrozenDatabase) error {
 	metaPath := filepath.Join(folderPath, DatabaseMetadataFile)
 
+	if Version != "" {
+		metadata.SyncVersion = Version
+	}
+
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return err
@@ -66,6 +70,10 @@ func ReadPageMetadata(folderPath string) (*FrozenPage, error) {
 // WritePageMetadata writes _page.json to a folder.
 func WritePageMetadata(folderPath string, metadata *FrozenPage) error {
 	metaPath := filepath.Join(folderPath, PageMetadataFile)
+
+	if Version != "" {
+		metadata.SyncVersion = Version
+	}
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {

@@ -100,6 +100,9 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Expose version to sync package for metadata
+	sync.Version = version
+
 	// Migrate API key on startup
 	config.MigrateAPIKeyToKeychain()
 
