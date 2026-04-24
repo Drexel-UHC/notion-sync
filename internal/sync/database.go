@@ -120,9 +120,8 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		if err != nil {
 			return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
 		}
-		fileNameMap := buildFileNameMap(entries)
 		countBefore := result.Total
-		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, result, src.Title, onProgress, fileNameMap)
+		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, result, src.Title, onProgress)
 
 		// Write per-source metadata for multi-source databases
 		if len(sources) > 1 {
@@ -169,40 +168,6 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 	return result, nil
 }
 
-// buildFileNameMap detects duplicate titles among entries and returns a map of
-// pageID → disambiguated filename (without .md extension) for pages that need renaming.
-// Pages with unique titles are not included in the map (empty string = use default).
-func buildFileNameMap(entries []notion.Page) map[string]string {
-	// Count occurrences of each sanitized name
-	type pageInfo struct {
-		id       string
-		safeName string
-	}
-	var pages []pageInfo
-	nameCount := make(map[string]int)
-
-	for _, entry := range entries {
-		title := getPageTitle(&entry)
-		safeName := util.SanitizeFileName(title)
-		if safeName == "" {
-			safeName = "Untitled"
-		}
-		pages = append(pages, pageInfo{id: entry.ID, safeName: safeName})
-		nameCount[safeName]++
-	}
-
-	// Build map for duplicates only
-	result := make(map[string]string)
-	for _, p := range pages {
-		if nameCount[p.safeName] >= 2 {
-			// Remove dashes from notion ID for the suffix
-			cleanID := strings.ReplaceAll(p.id, "-", "")
-			result[p.id] = p.safeName + "-" + cleanID
-		}
-	}
-	return result
-}
-
 // importEntries processes a batch of entries, updating result counters and calling onProgress.
 func importEntries(
 	client NotionClient,
@@ -211,7 +176,6 @@ func importEntries(
 	result *DatabaseFreezeResult,
 	title string,
 	onProgress ProgressCallback,
-	fileNameMap map[string]string,
 ) {
 	total := len(entries)
 	startIdx := result.Total
@@ -227,12 +191,11 @@ func importEntries(
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:           client,
-			NotionID:         entry.ID,
-			OutputFolder:     folderPath,
-			DatabaseID:       databaseID,
-			Page:             &entry,
-			OverrideFileName: fileNameMap[entry.ID],
+			Client:       client,
+			NotionID:     entry.ID,
+			OutputFolder: folderPath,
+			DatabaseID:   databaseID,
+			Page:         &entry,
 		})
 
 		if err != nil {
@@ -283,8 +246,15 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		log.Printf("warning: failed to write CLAUDE.md: %v", err)
 	}
 
+	// Clean up legacy SQLite database files (removed in v0.3)
+	removeLegacySQLite(workspacePath)
+
 	// --ids mode: fetch only specific pages, skip full query/diff/delete
 	if len(opts.PageIDs) > 0 {
+		// Migrate any existing title-based filenames to UUID-based.
+		localFiles, _ := scanLocalFiles(opts.FolderPath)
+		migrateToUUIDFilenames(opts.FolderPath, localFiles)
+
 		total := len(opts.PageIDs)
 		dbTitle := metadata.Title
 
@@ -372,7 +342,6 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	}
 
 	total := len(entries)
-	fileNameMap := buildFileNameMap(entries)
 
 	if onProgress != nil {
 		onProgress(ProgressPhase{Phase: PhaseDiffing, Total: total})
@@ -383,6 +352,9 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 	if err != nil {
 		return nil, fmt.Errorf("scan local files: %w", err)
 	}
+
+	// Migrate title-based filenames to UUID-based filenames (one-time).
+	migrateToUUIDFilenames(opts.FolderPath, localFiles)
 
 	// Track results
 	result := &DatabaseFreezeResult{
@@ -426,13 +398,12 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:           opts.Client,
-			NotionID:         entry.ID,
-			OutputFolder:     opts.FolderPath,
-			DatabaseID:       databaseID,
-			Page:             &entry,
-			Force:            opts.Force,
-			OverrideFileName: fileNameMap[entry.ID],
+			Client:       opts.Client,
+			NotionID:     entry.ID,
+			OutputFolder: opts.FolderPath,
+			DatabaseID:   databaseID,
+			Page:         &entry,
+			Force:        opts.Force,
 		})
 
 		if err != nil {
@@ -448,18 +419,6 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 			result.Updated++
 		case "skipped":
 			result.Skipped++
-		}
-	}
-
-	// Clean up orphaned files from filename disambiguation.
-	// If a page was previously saved as "Title.md" but now needs "Title-{id}.md",
-	// remove the old file to avoid duplicates.
-	for id, info := range localFiles {
-		if override, ok := fileNameMap[id]; ok {
-			newPath := filepath.Join(opts.FolderPath, override+".md")
-			if info.filePath != newPath {
-				os.Remove(info.filePath)
-			}
 		}
 	}
 
@@ -496,6 +455,41 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 type localFileInfo struct {
 	filePath   string
 	lastEdited string
+}
+
+// removeLegacySQLite deletes leftover _notion_sync.sqlite and _notion_sync.db
+// files from the workspace root. These were removed in v0.3.
+func removeLegacySQLite(workspacePath string) {
+	for _, name := range []string{"_notion_sync.sqlite", "_notion_sync.db"} {
+		p := filepath.Join(workspacePath, name)
+		if _, err := os.Stat(p); err == nil {
+			if err := os.Remove(p); err == nil {
+				log.Printf("removed legacy %s", name)
+			}
+		}
+	}
+}
+
+// migrateToUUIDFilenames renames title-based .md files to UUID-based filenames.
+// For each file in localFiles, if the filename doesn't match "{notion-id}.md",
+// it renames the file and updates the map entry in place.
+func migrateToUUIDFilenames(folderPath string, localFiles map[string]localFileInfo) {
+	for notionID, info := range localFiles {
+		expectedName := notionID + ".md"
+		expectedPath := filepath.Join(folderPath, expectedName)
+		if info.filePath == expectedPath {
+			continue
+		}
+		if err := os.Rename(info.filePath, expectedPath); err != nil {
+			log.Printf("warning: failed to rename %s to %s: %v", filepath.Base(info.filePath), expectedName, err)
+			continue
+		}
+		log.Printf("migrated: %s -> %s", filepath.Base(info.filePath), expectedName)
+		localFiles[notionID] = localFileInfo{
+			filePath:   expectedPath,
+			lastEdited: info.lastEdited,
+		}
+	}
 }
 
 func scanLocalFiles(folderPath string) (map[string]localFileInfo, error) {

@@ -165,9 +165,9 @@ func TestMapPropertiesToFrontmatter(t *testing.T) {
 	fm := map[string]interface{}{}
 	mapPropertiesToFrontmatter(props, fm)
 
-	// Title should be skipped (used as filename)
-	if _, ok := fm["Name"]; ok {
-		t.Error("title property should not be in frontmatter")
+	// Title should be included in frontmatter
+	if fm["Name"] != "Test" {
+		t.Errorf("Name = %v, want \"Test\"", fm["Name"])
 	}
 
 	assertFM := func(key string, want interface{}) {

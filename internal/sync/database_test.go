@@ -3,10 +3,7 @@ package sync
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
 func TestScanLocalFiles(t *testing.T) {
@@ -278,81 +275,54 @@ func TestFindSubSourceFolders_Mixed(t *testing.T) {
 	}
 }
 
-func TestBuildFileNameMap_NoDuplicates(t *testing.T) {
-	entries := []notion.Page{
-		testPage("aaa-111", "Alpha", "2025-01-01T00:00:00Z"),
-		testPage("bbb-222", "Beta", "2025-01-01T00:00:00Z"),
-		testPage("ccc-333", "Gamma", "2025-01-01T00:00:00Z"),
+func TestMigrateToUUIDFilenames(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a title-based file with notion-id in frontmatter
+	content := "---\nnotion-id: abc-123\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\n---\nBody\n"
+	os.WriteFile(filepath.Join(dir, "My Page.md"), []byte(content), 0644)
+
+	localFiles, err := scanLocalFiles(dir)
+	if err != nil {
+		t.Fatalf("scanLocalFiles: %v", err)
 	}
-	m := buildFileNameMap(entries)
-	if len(m) != 0 {
-		t.Errorf("expected empty map for unique titles, got %d entries: %v", len(m), m)
+
+	migrateToUUIDFilenames(dir, localFiles)
+
+	// Old file should be gone
+	if _, err := os.Stat(filepath.Join(dir, "My Page.md")); !os.IsNotExist(err) {
+		t.Error("expected 'My Page.md' to be removed after migration")
+	}
+
+	// UUID file should exist
+	uuidPath := filepath.Join(dir, "abc-123.md")
+	if _, err := os.Stat(uuidPath); os.IsNotExist(err) {
+		t.Error("expected 'abc-123.md' to exist after migration")
+	}
+
+	// Map should be updated
+	if localFiles["abc-123"].filePath != uuidPath {
+		t.Errorf("localFiles path = %q, want %q", localFiles["abc-123"].filePath, uuidPath)
 	}
 }
 
-func TestBuildFileNameMap_TwoDuplicates(t *testing.T) {
-	entries := []notion.Page{
-		testPage("aaa-111", "Hello", "2025-01-01T00:00:00Z"),
-		testPage("bbb-222", "Hello", "2025-01-01T00:00:00Z"),
-		testPage("ccc-333", "World", "2025-01-01T00:00:00Z"),
-	}
-	m := buildFileNameMap(entries)
+func TestMigrateToUUIDFilenames_AlreadyUUID(t *testing.T) {
+	dir := t.TempDir()
 
-	// Both "Hello" pages should be in the map
-	if len(m) != 2 {
-		t.Fatalf("expected 2 entries, got %d: %v", len(m), m)
-	}
-	if m["aaa-111"] != "Hello-aaa111" {
-		t.Errorf("aaa-111 = %q, want Hello-aaa111", m["aaa-111"])
-	}
-	if m["bbb-222"] != "Hello-bbb222" {
-		t.Errorf("bbb-222 = %q, want Hello-bbb222", m["bbb-222"])
-	}
-	// "World" should NOT be in the map
-	if _, ok := m["ccc-333"]; ok {
-		t.Error("ccc-333 (unique title) should not be in the map")
-	}
-}
+	// Write a file already named by UUID
+	content := "---\nnotion-id: abc-123\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\n---\nBody\n"
+	os.WriteFile(filepath.Join(dir, "abc-123.md"), []byte(content), 0644)
 
-func TestBuildFileNameMap_ThreeDuplicates(t *testing.T) {
-	entries := []notion.Page{
-		testPage("a1a1-b2b2", "Dup", "2025-01-01T00:00:00Z"),
-		testPage("c3c3-d4d4", "Dup", "2025-01-01T00:00:00Z"),
-		testPage("e5e5-f6f6", "Dup", "2025-01-01T00:00:00Z"),
+	localFiles, err := scanLocalFiles(dir)
+	if err != nil {
+		t.Fatalf("scanLocalFiles: %v", err)
 	}
-	m := buildFileNameMap(entries)
-	if len(m) != 3 {
-		t.Fatalf("expected 3 entries, got %d: %v", len(m), m)
-	}
-	for _, entry := range entries {
-		cleanID := strings.ReplaceAll(entry.ID, "-", "")
-		want := "Dup-" + cleanID
-		if m[entry.ID] != want {
-			t.Errorf("%s = %q, want %q", entry.ID, m[entry.ID], want)
-		}
-	}
-}
 
-func TestBuildFileNameMap_UntitledCollision(t *testing.T) {
-	// Two pages with empty titles → both become "Untitled"
-	p1 := testPage("id-1", "", "2025-01-01T00:00:00Z")
-	p1.Properties = map[string]notion.Property{
-		"Name": {Type: "title", Title: []notion.RichText{}},
-	}
-	p2 := testPage("id-2", "", "2025-01-01T00:00:00Z")
-	p2.Properties = map[string]notion.Property{
-		"Name": {Type: "title", Title: []notion.RichText{}},
-	}
-	entries := []notion.Page{p1, p2}
-	m := buildFileNameMap(entries)
-	if len(m) != 2 {
-		t.Fatalf("expected 2 entries, got %d: %v", len(m), m)
-	}
-	if m["id-1"] != "Untitled-id1" {
-		t.Errorf("id-1 = %q, want Untitled-id1", m["id-1"])
-	}
-	if m["id-2"] != "Untitled-id2" {
-		t.Errorf("id-2 = %q, want Untitled-id2", m["id-2"])
+	migrateToUUIDFilenames(dir, localFiles)
+
+	// File should still exist unchanged
+	if _, err := os.Stat(filepath.Join(dir, "abc-123.md")); os.IsNotExist(err) {
+		t.Error("expected 'abc-123.md' to still exist")
 	}
 }
 
