@@ -16,13 +16,12 @@ import (
 
 // FreezePageOptions contains options for freezing a page.
 type FreezePageOptions struct {
-	Client           NotionClient
-	NotionID         string
-	OutputFolder     string
-	DatabaseID       string
-	Page             *notion.Page // Pre-fetched page (optional)
-	Force            bool         // Skip timestamp check and always re-freeze
-	OverrideFileName string       // If set, use this instead of computing from title (without .md extension)
+	Client       NotionClient
+	NotionID     string
+	OutputFolder string
+	DatabaseID   string
+	Page         *notion.Page // Pre-fetched page (optional)
+	Force        bool         // Skip timestamp check and always re-freeze
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -38,14 +37,19 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	}
 
 	title := getPageTitle(page)
-	safeName := opts.OverrideFileName
-	if safeName == "" {
-		safeName = util.SanitizeFileName(title)
+
+	var filePath string
+	if opts.DatabaseID != "" {
+		// Database entry: use UUID filename
+		filePath = filepath.Join(opts.OutputFolder, opts.NotionID+".md")
+	} else {
+		// Standalone page: keep title-based filename
+		safeName := util.SanitizeFileName(title)
 		if safeName == "" {
 			safeName = "Untitled"
 		}
+		filePath = filepath.Join(opts.OutputFolder, safeName+".md")
 	}
-	filePath := filepath.Join(opts.OutputFolder, safeName+".md")
 
 	// Check for re-freeze: compare last_edited_time
 	exists := fileExists(filePath)
@@ -65,7 +69,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		}
 
 		if exists && storedEdited != "" && timestampsEqual(storedEdited, page.LastEditedTime) {
-			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: safeName}, nil
+			return &PageFreezeResult{Status: "skipped", FilePath: filePath, Title: title}, nil
 		}
 	}
 
@@ -136,7 +140,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		status = "updated"
 	}
 
-	return &PageFreezeResult{Status: status, FilePath: filePath, Title: safeName}, nil
+	return &PageFreezeResult{Status: status, FilePath: filePath, Title: title}, nil
 }
 
 // StandalonePageImportOptions contains options for importing a standalone page.
@@ -261,7 +265,9 @@ func mapPropertiesToFrontmatter(properties map[string]notion.Property, fm map[st
 	for key, prop := range properties {
 		switch prop.Type {
 		case "title":
-			// Already used as filename, skip
+			if len(prop.Title) > 0 {
+				fm[key] = markdown.ConvertRichText(prop.Title)
+			}
 
 		case "rich_text":
 			fm[key] = markdown.ConvertRichText(prop.RichText)

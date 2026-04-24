@@ -1,5 +1,8 @@
 package sync
 
+// Version is set by main.go at startup from the build-time version string.
+var Version string
+
 // FrozenDatabase represents metadata stored in _database.json.
 type FrozenDatabase struct {
 	DatabaseID   string `json:"databaseId"`
@@ -9,6 +12,7 @@ type FrozenDatabase struct {
 	FolderPath   string `json:"folderPath"`
 	LastSyncedAt string `json:"lastSyncedAt"`
 	EntryCount   int    `json:"entryCount"`
+	SyncVersion  string `json:"syncVersion,omitempty"`
 }
 
 // FrozenPage represents metadata stored in _page.json for standalone pages.
@@ -18,6 +22,7 @@ type FrozenPage struct {
 	URL          string `json:"url"`
 	FolderPath   string `json:"folderPath"`
 	LastSyncedAt string `json:"lastSyncedAt"`
+	SyncVersion  string `json:"syncVersion,omitempty"`
 }
 
 // DatabaseFreezeResult represents the result of a database sync operation.

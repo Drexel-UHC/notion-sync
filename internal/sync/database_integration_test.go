@@ -146,17 +146,11 @@ func TestRefreshDatabase_DeletionDetection(t *testing.T) {
 	}
 	mock.dataSources[dsID] = &notion.DataSourceDetail{ID: dsID}
 
-	// Write 3 local .md files
-	pages := []struct {
-		id, title string
-	}{
-		{"page-1", "Page One"},
-		{"page-2", "Page Two"},
-		{"page-3", "Page Three"},
-	}
-	for _, p := range pages {
-		content := "---\nnotion-id: " + p.id + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nBody\n"
-		os.WriteFile(filepath.Join(dbFolder, p.title+".md"), []byte(content), 0644)
+	// Write 3 local .md files (UUID-based filenames)
+	pageIDs := []string{"page-1", "page-2", "page-3"}
+	for _, id := range pageIDs {
+		content := "---\nnotion-id: " + id + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nBody\n"
+		os.WriteFile(filepath.Join(dbFolder, id+".md"), []byte(content), 0644)
 	}
 
 	// Write _database.json
@@ -189,7 +183,7 @@ func TestRefreshDatabase_DeletionDetection(t *testing.T) {
 	}
 
 	// Verify the deleted page's .md has notion-deleted: true
-	data, err := os.ReadFile(filepath.Join(dbFolder, "Page Two.md"))
+	data, err := os.ReadFile(filepath.Join(dbFolder, "page-2.md"))
 	if err != nil {
 		t.Fatalf("read deleted file: %v", err)
 	}
@@ -240,9 +234,9 @@ func TestRefreshMultiSource_Aggregation(t *testing.T) {
 		Title:        "Source1",
 		FolderPath:   sub1,
 	})
-	for _, p := range []struct{ id, title string }{{"p1", "Page1"}, {"p2", "Page2"}} {
-		content := "---\nnotion-id: " + p.id + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\n---\nBody\n"
-		os.WriteFile(filepath.Join(sub1, p.title+".md"), []byte(content), 0644)
+	for _, id := range []string{"p1", "p2"} {
+		content := "---\nnotion-id: " + id + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\n---\nBody\n"
+		os.WriteFile(filepath.Join(sub1, id+".md"), []byte(content), 0644)
 	}
 
 	// Create subfolder2 with 1 page
@@ -255,7 +249,7 @@ func TestRefreshMultiSource_Aggregation(t *testing.T) {
 		FolderPath:   sub2,
 	})
 	content := "---\nnotion-id: p3\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\n---\nBody\n"
-	os.WriteFile(filepath.Join(sub2, "Page3.md"), []byte(content), 0644)
+	os.WriteFile(filepath.Join(sub2, "p3.md"), []byte(content), 0644)
 
 	// Top-level metadata (no dataSourceId)
 	WriteDatabaseMetadata(dbFolder, &FrozenDatabase{
@@ -328,10 +322,10 @@ func TestFreshImport_Markdown(t *testing.T) {
 		t.Errorf("Created = %d, want 1", result.Created)
 	}
 
-	// .md file should exist
-	mdPath := filepath.Join(dir, "MarkdownDB", "TestPage.md")
+	// .md file should exist with UUID filename
+	mdPath := filepath.Join(dir, "MarkdownDB", "p1.md")
 	if _, err := os.Stat(mdPath); os.IsNotExist(err) {
-		t.Error("expected .md file to exist")
+		t.Error("expected p1.md file to exist")
 	}
 }
 
@@ -377,59 +371,49 @@ func TestFreshImport_DuplicateTitles(t *testing.T) {
 
 	dbFolder := filepath.Join(dir, "DupDB")
 
-	// "Same Name.md" should NOT exist (both pages need disambiguation)
-	if _, err := os.Stat(filepath.Join(dbFolder, "Same Name.md")); !os.IsNotExist(err) {
-		t.Error("expected 'Same Name.md' to NOT exist (should be disambiguated)")
+	// All files should use UUID filenames
+	expectedFiles := []struct {
+		id       string
+		filename string
+	}{
+		{"aaaa1111-2222-3333-4444-555566667777", "aaaa1111-2222-3333-4444-555566667777.md"},
+		{"bbbb1111-2222-3333-4444-555566667777", "bbbb1111-2222-3333-4444-555566667777.md"},
+		{"cccc1111-2222-3333-4444-555566667777", "cccc1111-2222-3333-4444-555566667777.md"},
 	}
 
-	// Both disambiguated files should exist
-	file1 := filepath.Join(dbFolder, "Same Name-aaaa111122223333444455556666777.md")
-	file2 := filepath.Join(dbFolder, "Same Name-bbbb111122223333444455556666777.md")
-
-	// Use glob since the exact dash-removal may vary
-	matches, _ := filepath.Glob(filepath.Join(dbFolder, "Same Name-*.md"))
-	if len(matches) != 2 {
-		t.Fatalf("expected 2 'Same Name-*.md' files, got %d: %v", len(matches), matches)
-	}
-
-	// Verify both have different notion-ids
-	ids := map[string]bool{}
-	for _, f := range matches {
-		data, err := os.ReadFile(f)
+	for _, ef := range expectedFiles {
+		path := filepath.Join(dbFolder, ef.filename)
+		data, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
+			t.Fatalf("expected %s to exist: %v", ef.filename, err)
 		}
 		fm, err := frontmatter.Parse(string(data))
 		if err != nil {
-			t.Fatalf("parse %s: %v", f, err)
+			t.Fatalf("parse %s: %v", ef.filename, err)
 		}
 		id, ok := fm["notion-id"].(string)
-		if !ok || id == "" {
-			t.Errorf("missing notion-id in %s", f)
+		if !ok || id != ef.id {
+			t.Errorf("%s: notion-id = %q, want %q", ef.filename, id, ef.id)
 		}
-		ids[id] = true
-	}
-	if len(ids) != 2 {
-		t.Errorf("expected 2 unique notion-ids, got %d", len(ids))
 	}
 
-	// "Unique.md" should exist with clean name
-	if _, err := os.Stat(filepath.Join(dbFolder, "Unique.md")); os.IsNotExist(err) {
-		t.Error("expected 'Unique.md' to exist (unique title, no disambiguation)")
+	// No title-based files should exist
+	if _, err := os.Stat(filepath.Join(dbFolder, "Same Name.md")); !os.IsNotExist(err) {
+		t.Error("expected 'Same Name.md' to NOT exist")
 	}
-
-	_ = file1
-	_ = file2
+	if _, err := os.Stat(filepath.Join(dbFolder, "Unique.md")); !os.IsNotExist(err) {
+		t.Error("expected 'Unique.md' to NOT exist")
+	}
 }
 
-func TestRefresh_DuplicateTitleRename(t *testing.T) {
+func TestRefresh_MigratesToUUIDFilenames(t *testing.T) {
 	dir := t.TempDir()
 	dbFolder := filepath.Join(dir, "TestDB")
 	os.MkdirAll(dbFolder, 0755)
 
 	mock := newMockClient()
-	dbID := "db-dup-rename"
-	dsID := "ds-dup-rename"
+	dbID := "db-migrate"
+	dsID := "ds-migrate"
 
 	mock.databases[dbID] = &notion.Database{
 		ID:    dbID,
@@ -444,9 +428,11 @@ func TestRefresh_DuplicateTitleRename(t *testing.T) {
 	pageAID := "aaaa0000-1111-2222-3333-444455556666"
 	pageBID := "bbbb0000-1111-2222-3333-444455556666"
 
-	// Pre-existing local file: PageA.md with notion-id page-a
-	oldContent := "---\nnotion-id: " + pageAID + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nOld body\n"
-	os.WriteFile(filepath.Join(dbFolder, "PageA.md"), []byte(oldContent), 0644)
+	// Pre-existing local files with title-based names
+	contentA := "---\nnotion-id: " + pageAID + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nBody A\n"
+	contentB := "---\nnotion-id: " + pageBID + "\nnotion-last-edited: \"2025-01-01T00:00:00Z\"\nnotion-database-id: " + dbID + "\n---\nBody B\n"
+	os.WriteFile(filepath.Join(dbFolder, "PageA.md"), []byte(contentA), 0644)
+	os.WriteFile(filepath.Join(dbFolder, "PageB.md"), []byte(contentB), 0644)
 
 	// Write _database.json
 	WriteDatabaseMetadata(dbFolder, &FrozenDatabase{
@@ -456,43 +442,40 @@ func TestRefresh_DuplicateTitleRename(t *testing.T) {
 		FolderPath:   dbFolder,
 	})
 
-	// Now mock returns 2 entries both titled "PageA" — triggers disambiguation
+	// Mock returns same entries, timestamps match → will be skipped after migration
 	mock.entries[dsID] = []notion.Page{
-		testPage(pageAID, "PageA", "2025-01-02T00:00:00Z"), // newer timestamp → will be processed
-		testPage(pageBID, "PageA", "2025-01-01T00:00:00Z"),
+		testPage(pageAID, "PageA", "2025-01-01T00:00:00Z"),
+		testPage(pageBID, "PageB", "2025-01-01T00:00:00Z"),
 	}
-	mock.blocks[pageAID] = []notion.Block{
-		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
-			RichText: []notion.RichText{{Type: "text", PlainText: "Body A", Text: &notion.TextContent{Content: "Body A"}}},
-		}},
-	}
-	mock.blocks[pageBID] = []notion.Block{
-		{Type: "paragraph", Paragraph: &notion.ParagraphBlock{
-			RichText: []notion.RichText{{Type: "text", PlainText: "Body B", Text: &notion.TextContent{Content: "Body B"}}},
-		}},
-	}
+	mock.blocks[pageAID] = []notion.Block{}
+	mock.blocks[pageBID] = []notion.Block{}
 
 	result, err := RefreshDatabase(RefreshOptions{
 		Client:     mock,
 		FolderPath: dbFolder,
-		Force:      true,
 	}, nil)
 	if err != nil {
 		t.Fatalf("RefreshDatabase: %v", err)
 	}
 
-	if result.Updated+result.Created != 2 {
-		t.Errorf("Updated+Created = %d, want 2", result.Updated+result.Created)
+	// Both should be skipped (timestamps match, migration just renames)
+	if result.Skipped != 2 {
+		t.Errorf("Skipped = %d, want 2", result.Skipped)
 	}
 
-	// Old "PageA.md" should be gone
+	// Old title-based files should be gone
 	if _, err := os.Stat(filepath.Join(dbFolder, "PageA.md")); !os.IsNotExist(err) {
 		t.Error("expected old 'PageA.md' to be removed")
 	}
+	if _, err := os.Stat(filepath.Join(dbFolder, "PageB.md")); !os.IsNotExist(err) {
+		t.Error("expected old 'PageB.md' to be removed")
+	}
 
-	// Two disambiguated files should exist
-	matches, _ := filepath.Glob(filepath.Join(dbFolder, "PageA-*.md"))
-	if len(matches) != 2 {
-		t.Fatalf("expected 2 'PageA-*.md' files, got %d: %v", len(matches), matches)
+	// UUID-named files should exist
+	if _, err := os.Stat(filepath.Join(dbFolder, pageAID+".md")); os.IsNotExist(err) {
+		t.Errorf("expected %s.md to exist", pageAID)
+	}
+	if _, err := os.Stat(filepath.Join(dbFolder, pageBID+".md")); os.IsNotExist(err) {
+		t.Errorf("expected %s.md to exist", pageBID)
 	}
 }
