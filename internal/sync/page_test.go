@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ran-codes/notion-sync/internal/notion"
@@ -449,5 +451,43 @@ func TestMapPropertiesToFrontmatter_UnknownTypeSkipped(t *testing.T) {
 
 	if len(fm) != 0 {
 		t.Errorf("expected empty frontmatter for unknown types, got %v", fm)
+	}
+}
+
+func TestFreezePage_TrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	page := testPage("page-id-001", "My Page", "2025-01-01T00:00:00Z")
+	client := newMockClient()
+	client.pages["page-id-001"] = &page
+	// paragraph block so md body ends without \n (joins produce "Hello world" with no newline)
+	client.blocks["page-id-001"] = []notion.Block{
+		{
+			ID:   "block-1",
+			Type: "paragraph",
+			Paragraph: &notion.ParagraphBlock{
+				RichText: []notion.RichText{
+					{Type: "text", PlainText: "Hello world", Text: &notion.TextContent{Content: "Hello world"}},
+				},
+			},
+		},
+	}
+
+	_, err := FreezePage(FreezePageOptions{
+		Client:       client,
+		NotionID:     "page-id-001",
+		OutputFolder: dir,
+		DatabaseID:   "db-123",
+		Page:         &page,
+	})
+	if err != nil {
+		t.Fatalf("FreezePage: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "page-id-001.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Errorf("md file does not end with newline; last byte = %q", data[len(data)-1])
 	}
 }

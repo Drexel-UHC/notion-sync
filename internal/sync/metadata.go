@@ -43,7 +43,7 @@ func WriteDatabaseMetadata(folderPath string, metadata *FrozenDatabase) error {
 		return err
 	}
 
-	return os.WriteFile(metaPath, data, 0644)
+	return os.WriteFile(metaPath, append(data, '\n'), 0644)
 }
 
 // ReadPageMetadata reads _page.json from a folder.
@@ -80,7 +80,7 @@ func WritePageMetadata(folderPath string, metadata *FrozenPage) error {
 		return err
 	}
 
-	return os.WriteFile(metaPath, data, 0644)
+	return os.WriteFile(metaPath, append(data, '\n'), 0644)
 }
 
 // ListSyncedPages scans the pages/ subdirectory for folders containing _page.json.

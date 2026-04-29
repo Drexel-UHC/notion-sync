@@ -103,6 +103,36 @@ func TestListSyncedDatabases(t *testing.T) {
 	}
 }
 
+func TestWriteDatabaseMetadata_TrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenDatabase{DatabaseID: "abc", Title: "T", EntryCount: 1}
+	if err := WriteDatabaseMetadata(dir, meta); err != nil {
+		t.Fatalf("WriteDatabaseMetadata: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, DatabaseMetadataFile))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Errorf("file does not end with newline; last byte = %q", data[len(data)-1])
+	}
+}
+
+func TestWritePageMetadata_TrailingNewline(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenPage{PageID: "abc", Title: "T"}
+	if err := WritePageMetadata(dir, meta); err != nil {
+		t.Fatalf("WritePageMetadata: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, PageMetadataFile))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Errorf("file does not end with newline; last byte = %q", data[len(data)-1])
+	}
+}
+
 func TestListSyncedDatabases_NonexistentDir(t *testing.T) {
 	databases, err := ListSyncedDatabases(filepath.Join(t.TempDir(), "nope"))
 	if err != nil {

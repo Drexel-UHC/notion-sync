@@ -33,15 +33,19 @@ var presignedURLPattern = regexp.MustCompile(
 
 // Result summarizes a clean run.
 type Result struct {
-	FilesScanned int
-	FilesChanged int
-	URLsStripped int
-	DryRun       bool
+	FilesScanned  int
+	FilesChanged  int
+	URLsStripped  int
+	NewlinesFixed int
+	DryRun        bool
 }
 
-// Folder walks `root` recursively and strips pre-signed query strings from
-// every `.md` file it finds. When dryRun is true, files are not modified;
-// the result reports what would have changed.
+// Folder walks `root` recursively and applies cleanups to eligible files:
+//   - strips pre-signed S3 query strings from `.md` files
+//   - appends a trailing newline to `.md` and `.json` files that are missing one
+//
+// When dryRun is true, files are not modified; the result reports what would
+// have changed.
 func Folder(root string, dryRun bool) (*Result, error) {
 	r := &Result{DryRun: dryRun}
 
@@ -52,35 +56,54 @@ func Folder(root string, dryRun bool) (*Result, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+
+		name := strings.ToLower(d.Name())
+		isMd := strings.HasSuffix(name, ".md")
+		isJSON := strings.HasSuffix(name, ".json")
+
+		if !isMd && !isJSON {
 			return nil
 		}
-
-		r.FilesScanned++
 
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", path, err)
 		}
 
-		stripped, count := stripContent(string(content))
-		if count == 0 {
+		changed := false
+		out := string(content)
+
+		if isMd {
+			r.FilesScanned++
+			stripped, count := stripContent(out)
+			if count > 0 {
+				out = stripped
+				r.URLsStripped += count
+				changed = true
+			}
+		}
+
+		if len(out) > 0 && out[len(out)-1] != '\n' {
+			out += "\n"
+			r.NewlinesFixed++
+			changed = true
+		}
+
+		if !changed {
 			return nil
 		}
 
 		r.FilesChanged++
-		r.URLsStripped += count
 
 		if dryRun {
 			return nil
 		}
 
-		// Preserve the existing file mode by reading then writing.
 		info, err := os.Stat(path)
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", path, err)
 		}
-		if err := os.WriteFile(path, []byte(stripped), info.Mode()); err != nil {
+		if err := os.WriteFile(path, []byte(out), info.Mode()); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 		return nil

@@ -123,6 +123,9 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	}
 
 	content := frontmatter.BuildOrdered(fm, keyOrder, md)
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
 
 	// Write markdown file
 	if err := os.MkdirAll(opts.OutputFolder, 0755); err != nil {

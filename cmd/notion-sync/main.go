@@ -592,7 +592,7 @@ func runClean(args []string) error {
 		label = "Would modify"
 	}
 	fmt.Printf("Scanned: %d .md files\n", r.FilesScanned)
-	fmt.Printf("%s: %d files (%d URLs stripped)\n", label, r.FilesChanged, r.URLsStripped)
+	fmt.Printf("%s: %d files (%d URLs stripped, %d trailing newlines added)\n", label, r.FilesChanged, r.URLsStripped, r.NewlinesFixed)
 	return nil
 }
 
