@@ -17,17 +17,19 @@ import (
 
 // DatabaseImportOptions contains options for importing a database.
 type DatabaseImportOptions struct {
-	Client       NotionClient
-	DatabaseID   string
-	OutputFolder string
+	Client         NotionClient
+	DatabaseID     string
+	OutputFolder   string
+	StripPresigned bool // Strip rotating AWS pre-signed query strings from file URLs
 }
 
 // RefreshOptions contains options for refreshing a database.
 type RefreshOptions struct {
-	Client     NotionClient
-	FolderPath string
-	Force      bool     // Skip timestamp comparison and resync all entries
-	PageIDs    []string // If set, only refresh these specific page IDs
+	Client         NotionClient
+	FolderPath     string
+	Force          bool     // Skip timestamp comparison and resync all entries
+	PageIDs        []string // If set, only refresh these specific page IDs
+	StripPresigned bool     // Strip rotating AWS pre-signed query strings from file URLs
 }
 
 // dataSourceInfo holds resolved info for a single data source to import.
@@ -121,7 +123,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 			return nil, fmt.Errorf("query data source %s: %w", src.Title, err)
 		}
 		countBefore := result.Total
-		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, result, src.Title, onProgress)
+		importEntries(opts.Client, entries, src.FolderPath, opts.DatabaseID, result, src.Title, opts.StripPresigned, onProgress)
 
 		// Write per-source metadata for multi-source databases
 		if len(sources) > 1 {
@@ -175,6 +177,7 @@ func importEntries(
 	folderPath, databaseID string,
 	result *DatabaseFreezeResult,
 	title string,
+	stripPresigned bool,
 	onProgress ProgressCallback,
 ) {
 	total := len(entries)
@@ -191,11 +194,12 @@ func importEntries(
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:       client,
-			NotionID:     entry.ID,
-			OutputFolder: folderPath,
-			DatabaseID:   databaseID,
-			Page:         &entry,
+			Client:         client,
+			NotionID:       entry.ID,
+			OutputFolder:   folderPath,
+			DatabaseID:     databaseID,
+			Page:           &entry,
+			StripPresigned: stripPresigned,
 		})
 
 		if err != nil {
@@ -274,11 +278,12 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 			}
 
 			pageResult, err := FreezePage(FreezePageOptions{
-				Client:       opts.Client,
-				NotionID:     pageID,
-				OutputFolder: opts.FolderPath,
-				DatabaseID:   databaseID,
-				Force:        true,
+				Client:         opts.Client,
+				NotionID:       pageID,
+				OutputFolder:   opts.FolderPath,
+				DatabaseID:     databaseID,
+				Force:          true,
+				StripPresigned: opts.StripPresigned,
 			})
 
 			if err != nil {
@@ -398,12 +403,13 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 		}
 
 		pageResult, err := FreezePage(FreezePageOptions{
-			Client:       opts.Client,
-			NotionID:     entry.ID,
-			OutputFolder: opts.FolderPath,
-			DatabaseID:   databaseID,
-			Page:         &entry,
-			Force:        opts.Force,
+			Client:         opts.Client,
+			NotionID:       entry.ID,
+			OutputFolder:   opts.FolderPath,
+			DatabaseID:     databaseID,
+			Page:           &entry,
+			Force:          opts.Force,
+			StripPresigned: opts.StripPresigned,
 		})
 
 		if err != nil {
@@ -584,10 +590,11 @@ func refreshMultiSource(opts RefreshOptions, subFolders []string, parentMeta *Fr
 
 	for _, subFolder := range subFolders {
 		subOpts := RefreshOptions{
-			Client:     opts.Client,
-			FolderPath: subFolder,
-			Force:      opts.Force,
-			PageIDs:    opts.PageIDs,
+			Client:         opts.Client,
+			FolderPath:     subFolder,
+			Force:          opts.Force,
+			PageIDs:        opts.PageIDs,
+			StripPresigned: opts.StripPresigned,
 		}
 		subResult, err := RefreshDatabase(subOpts, onProgress)
 		if err != nil {

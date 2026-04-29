@@ -31,6 +31,10 @@ func (c *CachedBlockFetcher) FetchAllBlocks(blockID string) ([]notion.Block, err
 type ConvertContext struct {
 	Client      BlockFetcher
 	IndentLevel int
+	// StripPresigned, when true, removes the rotating AWS pre-signed query
+	// string from media block URLs (image/pdf/video/file/audio) so that
+	// snapshots aren't churned by hourly URL rotation.
+	StripPresigned bool
 }
 
 // ConvertBlocksToMarkdown converts a slice of Notion blocks to Markdown.
@@ -133,7 +137,7 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 			return "", nil
 		}
 		text := ConvertRichText(block.BulletedListItem.RichText)
-		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1}
+		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1, StripPresigned: ctx.StripPresigned}
 		children, err := maybeConvertChildren(block, childCtx)
 		if err != nil {
 			return "", err
@@ -145,7 +149,7 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 			return "", nil
 		}
 		text := ConvertRichText(block.NumberedListItem.RichText)
-		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1}
+		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1, StripPresigned: ctx.StripPresigned}
 		children, err := maybeConvertChildren(block, childCtx)
 		if err != nil {
 			return "", err
@@ -161,7 +165,7 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 		if block.ToDo.Checked {
 			check = "x"
 		}
-		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1}
+		childCtx := &ConvertContext{Client: ctx.Client, IndentLevel: ctx.IndentLevel + 1, StripPresigned: ctx.StripPresigned}
 		children, err := maybeConvertChildren(block, childCtx)
 		if err != nil {
 			return "", err
@@ -249,19 +253,19 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 		return fmt.Sprintf("<!-- child database: %s -->", block.ChildDatabase.Title), nil
 
 	case "image":
-		return convertMediaBlock(block.Image, "image"), nil
+		return convertMediaBlock(block.Image, "image", ctx), nil
 
 	case "video":
-		return convertMediaBlock(block.Video, ""), nil
+		return convertMediaBlock(block.Video, "", ctx), nil
 
 	case "audio":
-		return convertMediaBlock(block.Audio, ""), nil
+		return convertMediaBlock(block.Audio, "", ctx), nil
 
 	case "file":
-		return convertMediaBlock(block.File, ""), nil
+		return convertMediaBlock(block.File, "", ctx), nil
 
 	case "pdf":
-		return convertMediaBlock(block.PDF, ""), nil
+		return convertMediaBlock(block.PDF, "", ctx), nil
 
 	case "bookmark":
 		if block.Bookmark == nil {
@@ -325,7 +329,7 @@ func convertBlock(block notion.Block, ctx *ConvertContext, numberedIndex int) (s
 	}
 }
 
-func convertMediaBlock(media *notion.MediaBlock, defaultAlt string) string {
+func convertMediaBlock(media *notion.MediaBlock, defaultAlt string, ctx *ConvertContext) string {
 	if media == nil {
 		return ""
 	}
@@ -335,6 +339,10 @@ func convertMediaBlock(media *notion.MediaBlock, defaultAlt string) string {
 		url = media.External.URL
 	} else if media.File != nil {
 		url = media.File.URL
+	}
+
+	if ctx != nil && ctx.StripPresigned {
+		url = notion.StripPresignedParams(url)
 	}
 
 	caption := ConvertRichText(media.Caption)

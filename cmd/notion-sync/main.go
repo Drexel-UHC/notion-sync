@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ran-codes/notion-sync/internal/clean"
 	"github.com/ran-codes/notion-sync/internal/config"
 	"github.com/ran-codes/notion-sync/internal/notion"
 	"github.com/ran-codes/notion-sync/internal/sync"
@@ -19,6 +20,8 @@ var version = "dev"
 // boolFlags lists flags that don't take a value argument.
 var boolFlags = map[string]bool{
 	"--force": true, "-f": true,
+	"--keep-presigned-params": true,
+	"--dry-run":               true,
 }
 
 // reorderArgs moves flag arguments (starting with "-") before positional arguments
@@ -55,18 +58,25 @@ func reorderArgs(args []string) []string {
 var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + version + `)
 
 Usage:
-  notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>]
-  notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>]
+  notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>] [--keep-presigned-params]
+  notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>] [--keep-presigned-params]
   notion-sync list [<output-folder>]
+  notion-sync clean <folder> [--dry-run]
   notion-sync config set <key> <value>
 
 Commands:
   import    Import a Notion database or standalone page to local Markdown files
             Automatically detects whether the ID is a database or page.
+            --keep-presigned-params  Keep AWS S3 pre-signed query strings on file URLs
+                                     (default: stripped to keep diffs stable)
   refresh   Refresh an existing synced database or standalone page (incremental update)
             --ids id1,id2  Refresh only specific pages by ID (databases only)
             --force, -f    Resync all entries, ignoring timestamps
+            --keep-presigned-params  Keep AWS S3 pre-signed query strings on file URLs
   list      List all synced databases and pages in a folder
+  clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
+            Useful one-time backfill after upgrading. No API calls.
+            --dry-run  Show what would change without writing
   config    Manage configuration (apiKey, defaultOutputFolder)
 
 Examples:
@@ -74,6 +84,7 @@ Examples:
   notion-sync refresh ./notion/My\ Database
   notion-sync refresh ./notion/pages/My\ Page_abc12345
   notion-sync refresh ./notion/My\ Database --force
+  notion-sync clean ./notion --dry-run
   notion-sync list ./notion
 
 API Key Priority:
@@ -117,6 +128,8 @@ func main() {
 		err = runRefresh(args)
 	case "list":
 		err = runList(args)
+	case "clean":
+		err = runClean(args)
 	case "config":
 		err = runConfig(args)
 	default:
@@ -141,6 +154,7 @@ func runImport(args []string) error {
 	outputAlt := fs.String("out", "", "Output folder (alias)")
 	output2 := fs.String("o", "", "Output folder (shorthand)")
 	apiKey := fs.String("api-key", "", "Notion API key")
+	keepPresigned := fs.Bool("keep-presigned-params", false, "Keep AWS S3 pre-signed query strings on file URLs")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -183,11 +197,13 @@ func runImport(args []string) error {
 
 	client := notion.NewClient(key)
 
+	stripPresigned := !*keepPresigned
+
 	// Auto-detect: try database first, fall back to page
 	_, dbErr := client.GetDatabase(notionID)
 	if dbErr != nil && notion.IsNotFoundError(dbErr) {
 		// Not a database — try as a standalone page
-		return runImportPage(client, notionID, outputFolder)
+		return runImportPage(client, notionID, outputFolder, stripPresigned)
 	}
 	if dbErr != nil {
 		return fmt.Errorf("fetch database: %w", dbErr)
@@ -198,9 +214,10 @@ func runImport(args []string) error {
 	var dbTitle string
 
 	result, err := sync.FreshDatabaseImport(sync.DatabaseImportOptions{
-		Client:       client,
-		DatabaseID:   notionID,
-		OutputFolder: outputFolder,
+		Client:         client,
+		DatabaseID:     notionID,
+		OutputFolder:   outputFolder,
+		StripPresigned: stripPresigned,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhaseImporting {
 			dbTitle = p.Title
@@ -231,15 +248,16 @@ func runImport(args []string) error {
 	return nil
 }
 
-func runImportPage(client *notion.Client, pageID, outputFolder string) error {
+func runImportPage(client *notion.Client, pageID, outputFolder string, stripPresigned bool) error {
 	fmt.Println("Importing standalone page...")
 	fmt.Println("Note: Pages with deeply nested content (bullet points, toggles, callouts)")
 	fmt.Println("      require one API call per nesting level. Notion limits ~3 requests/sec.")
 
 	result, err := sync.FreezeStandalonePage(sync.StandalonePageImportOptions{
-		Client:       client,
-		PageID:       pageID,
-		OutputFolder: outputFolder,
+		Client:         client,
+		PageID:         pageID,
+		OutputFolder:   outputFolder,
+		StripPresigned: stripPresigned,
 	})
 	if err != nil {
 		return err
@@ -260,6 +278,7 @@ func runRefresh(args []string) error {
 	force := fs.Bool("force", false, "Resync all entries, ignoring timestamps")
 	forceShort := fs.Bool("f", false, "Resync all entries (shorthand)")
 	ids := fs.String("ids", "", "Comma-separated Notion page IDs to refresh")
+	keepPresigned := fs.Bool("keep-presigned-params", false, "Keep AWS S3 pre-signed query strings on file URLs")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -286,6 +305,7 @@ func runRefresh(args []string) error {
 
 	folderPath := fs.Arg(0)
 	forceRefresh := *force || *forceShort
+	stripPresigned := !*keepPresigned
 
 	// Parse --ids flag
 	var pageIDs []string
@@ -308,7 +328,7 @@ func runRefresh(args []string) error {
 	// Check if the folder is a standalone page (has _page.json)
 	pageMeta, _ := sync.ReadPageMetadata(folderPath)
 	if pageMeta != nil {
-		return runRefreshPage(client, folderPath, forceRefresh)
+		return runRefreshPage(client, folderPath, forceRefresh, stripPresigned)
 	}
 
 	if len(pageIDs) > 0 {
@@ -321,10 +341,11 @@ func runRefresh(args []string) error {
 	var dbTitle string
 
 	result, err := sync.RefreshDatabase(sync.RefreshOptions{
-		Client:     client,
-		FolderPath: folderPath,
-		Force:      forceRefresh,
-		PageIDs:    pageIDs,
+		Client:         client,
+		FolderPath:     folderPath,
+		Force:          forceRefresh,
+		PageIDs:        pageIDs,
+		StripPresigned: stripPresigned,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhaseImporting {
 			dbTitle = p.Title
@@ -355,7 +376,7 @@ func runRefresh(args []string) error {
 	return nil
 }
 
-func runRefreshPage(client *notion.Client, folderPath string, force bool) error {
+func runRefreshPage(client *notion.Client, folderPath string, force, stripPresigned bool) error {
 	if force {
 		fmt.Println("Force refreshing page (ignoring timestamps)...")
 	} else {
@@ -363,9 +384,10 @@ func runRefreshPage(client *notion.Client, folderPath string, force bool) error 
 	}
 
 	result, err := sync.RefreshStandalonePage(sync.RefreshStandalonePageOptions{
-		Client:     client,
-		FolderPath: folderPath,
-		Force:      force,
+		Client:         client,
+		FolderPath:     folderPath,
+		Force:          force,
+		StripPresigned: stripPresigned,
 	})
 	if err != nil {
 		return err
@@ -426,7 +448,44 @@ func runList(args []string) error {
 	return nil
 }
 
-//// 2.4 Config ----
+//// 2.4 Clean ----
+
+func runClean(args []string) error {
+	fs := flag.NewFlagSet("clean", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "Show what would change without writing")
+
+	if err := fs.Parse(reorderArgs(args)); err != nil {
+		return err
+	}
+
+	if fs.NArg() == 0 {
+		return fmt.Errorf("missing folder path\n" +
+			"Usage: notion-sync clean <folder> [--dry-run]\n" +
+			"Example: notion-sync clean ./notion")
+	}
+
+	folder := fs.Arg(0)
+	if *dryRun {
+		fmt.Printf("Scanning %s (dry run)...\n", folder)
+	} else {
+		fmt.Printf("Cleaning %s...\n", folder)
+	}
+
+	r, err := clean.Folder(folder, *dryRun)
+	if err != nil {
+		return err
+	}
+
+	label := "Modified"
+	if *dryRun {
+		label = "Would modify"
+	}
+	fmt.Printf("Scanned: %d .md files\n", r.FilesScanned)
+	fmt.Printf("%s: %d files (%d URLs stripped)\n", label, r.FilesChanged, r.URLsStripped)
+	return nil
+}
+
+//// 2.5 Config ----
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
