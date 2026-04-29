@@ -60,6 +60,7 @@ var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + v
 Usage:
   notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>] [--keep-presigned-params]
   notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>] [--keep-presigned-params]
+  notion-sync push <folder> [--force] [--dry-run] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync clean <folder> [--dry-run]
   notion-sync config set <key> <value>
@@ -73,6 +74,10 @@ Commands:
             --ids id1,id2  Refresh only specific pages by ID (databases only)
             --force, -f    Resync all entries, ignoring timestamps
             --keep-presigned-params  Keep AWS S3 pre-signed query strings on file URLs
+  push      Push local frontmatter property changes back to Notion (properties only, no body)
+            Refuses to push files where Notion has been edited since last sync, unless --force.
+            --force, -f    Push even if Notion has newer edits (overwrites Notion-side changes)
+            --dry-run      Show what would be pushed without writing to Notion
   list      List all synced databases and pages in a folder
   clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
             Useful one-time backfill after upgrading. No API calls.
@@ -84,6 +89,8 @@ Examples:
   notion-sync refresh ./notion/My\ Database
   notion-sync refresh ./notion/pages/My\ Page_abc12345
   notion-sync refresh ./notion/My\ Database --force
+  notion-sync push ./notion/My\ Database
+  notion-sync push ./notion/My\ Database --dry-run
   notion-sync clean ./notion --dry-run
   notion-sync list ./notion
 
@@ -126,6 +133,8 @@ func main() {
 		err = runImport(args)
 	case "refresh":
 		err = runRefresh(args)
+	case "push":
+		err = runPush(args)
 	case "list":
 		err = runList(args)
 	case "clean":
@@ -399,7 +408,102 @@ func runRefreshPage(client *notion.Client, folderPath string, force, stripPresig
 	return nil
 }
 
-//// 2.3 List ----
+//// 2.3 Push ----
+
+func runPush(args []string) error {
+	fs := flag.NewFlagSet("push", flag.ExitOnError)
+	apiKey := fs.String("api-key", "", "Notion API key")
+	force := fs.Bool("force", false, "Push even if Notion has newer edits")
+	forceShort := fs.Bool("f", false, "Push even if Notion has newer edits (shorthand)")
+	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing")
+
+	if err := fs.Parse(reorderArgs(args)); err != nil {
+		return err
+	}
+
+	if fs.NArg() == 0 {
+		return fmt.Errorf("missing folder path\n" +
+			"Usage: notion-sync push <folder> [--force] [--dry-run] [--api-key <key>]\n" +
+			"Example: notion-sync push ./notion/My\\ Database")
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	key := *apiKey
+	if key == "" {
+		key = cfg.APIKey
+	}
+	if msg := config.ValidateAPIKey(key); msg != "" {
+		return fmt.Errorf("%s", msg)
+	}
+
+	folderPath := fs.Arg(0)
+	forceFlag := *force || *forceShort
+
+	if *dryRun {
+		fmt.Println("Pushing properties (dry run)...")
+	} else if forceFlag {
+		fmt.Println("Force pushing properties (ignoring conflicts)...")
+	} else {
+		fmt.Println("Pushing properties to Notion...")
+	}
+
+	client := notion.NewClient(key)
+	var dbTitle string
+
+	result, err := sync.PushDatabase(sync.PushOptions{
+		Client:     client,
+		FolderPath: folderPath,
+		Force:      forceFlag,
+		DryRun:     *dryRun,
+	}, func(p sync.ProgressPhase) {
+		if p.Phase == sync.PhasePushing {
+			dbTitle = p.Title
+		}
+		fmt.Printf("\r%-60s", formatPushProgress(p, dbTitle))
+	})
+
+	if err != nil {
+		fmt.Println()
+		return err
+	}
+
+	fmt.Println()
+
+	if *dryRun {
+		fmt.Printf("Dry run: \"%s\"\n", result.Title)
+	} else {
+		fmt.Printf("Done: \"%s\"\n", result.Title)
+	}
+	fmt.Printf("  Total:     %d\n", result.Total)
+	fmt.Printf("  Pushed:    %d\n", result.Pushed)
+	fmt.Printf("  Skipped:   %d\n", result.Skipped)
+
+	if result.Conflicts > 0 {
+		fmt.Printf("  Conflicts: %d (Notion has newer edits — use --force to overwrite)\n", result.Conflicts)
+		for _, f := range result.ConflictFiles {
+			fmt.Printf("    - %s\n", f)
+		}
+	}
+
+	if result.Failed > 0 {
+		fmt.Printf("  Failed:    %d\n", result.Failed)
+		for _, e := range result.Errors {
+			fmt.Printf("    - %s\n", e)
+		}
+	}
+
+	if result.Conflicts > 0 {
+		return fmt.Errorf("%d file(s) have conflicts; use --force to overwrite", result.Conflicts)
+	}
+
+	return nil
+}
+
+//// 2.5 List ----
 
 func runList(args []string) error {
 	outputFolder := "./notion"
@@ -448,7 +552,7 @@ func runList(args []string) error {
 	return nil
 }
 
-//// 2.4 Clean ----
+//// 2.6 Clean ----
 
 func runClean(args []string) error {
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
@@ -485,7 +589,7 @@ func runClean(args []string) error {
 	return nil
 }
 
-//// 2.5 Config ----
+//// 2.7 Config ----
 
 func runConfig(args []string) error {
 	if len(args) == 0 {
@@ -573,6 +677,23 @@ func printAPIKeyStatus(key string) {
 }
 
 // 3. Helpers ----
+
+func formatPushProgress(p sync.ProgressPhase, dbTitle string) string {
+	switch p.Phase {
+	case sync.PhasePushScanning:
+		return "Scanning local files..."
+	case sync.PhasePushing:
+		title := dbTitle
+		if title == "" {
+			title = p.Title
+		}
+		return fmt.Sprintf("Pushing \"%s\"... %d/%d", title, p.Current, p.Total)
+	case sync.PhaseComplete:
+		return "Done"
+	default:
+		return ""
+	}
+}
 
 func formatProgress(p sync.ProgressPhase, dbTitle string) string {
 	switch p.Phase {

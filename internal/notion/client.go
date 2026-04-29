@@ -221,6 +221,20 @@ func (c *Client) QueryDataSource(dataSourceID string, startCursor *string) (*Pag
 	return &result, nil
 }
 
+// UpdatePage updates page properties via PATCH /pages/{id}.
+func (c *Client) UpdatePage(pageID string, properties map[string]interface{}) (*Page, error) {
+	body := map[string]interface{}{"properties": properties}
+	respBody, err := c.request("PATCH", "/pages/"+pageID, body)
+	if err != nil {
+		return nil, err
+	}
+	var page Page
+	if err := json.Unmarshal(respBody, &page); err != nil {
+		return nil, fmt.Errorf("unmarshal page: %w", err)
+	}
+	return &page, nil
+}
+
 // GetPage retrieves a page by ID.
 func (c *Client) GetPage(pageID string) (*Page, error) {
 	respBody, err := c.request("GET", "/pages/"+pageID, nil)
