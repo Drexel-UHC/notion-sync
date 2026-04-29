@@ -73,8 +73,9 @@ func Folder(root string, dryRun bool) (*Result, error) {
 		changed := false
 		out := string(content)
 
+		r.FilesScanned++
+
 		if isMd {
-			r.FilesScanned++
 			stripped, count := stripContent(out)
 			if count > 0 {
 				out = stripped

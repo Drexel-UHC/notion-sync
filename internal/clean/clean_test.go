@@ -226,11 +226,9 @@ func TestFolder_DryRunDoesNotFixNewlines(t *testing.T) {
 	}
 }
 
-func TestFolder_SkipsNonMarkdown(t *testing.T) {
+func TestFolder_SkipsNonMarkdownNonJSON(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "_database.json"),
-		[]byte(`{"foo": "https://prod-files-secure.s3.us-west-2.amazonaws.com/x?X-Amz-Signature=abc"}`),
-		0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "data.csv"), []byte("a,b,c"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,8 +236,27 @@ func TestFolder_SkipsNonMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.FilesScanned != 0 {
-		t.Errorf("non-md file should not be scanned, got FilesScanned=%d", r.FilesScanned)
+	if r.FilesScanned != 0 || r.FilesChanged != 0 {
+		t.Errorf("csv file should not be touched, got %+v", r)
+	}
+}
+
+func TestFolder_JSONURLsNotStripped(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"foo": "https://prod-files-secure.s3.us-west-2.amazonaws.com/x?X-Amz-Signature=abc"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "_database.json"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsStripped != 0 {
+		t.Errorf("URLs should not be stripped from JSON files, got URLsStripped=%d", r.URLsStripped)
+	}
+	if r.FilesChanged != 0 {
+		t.Errorf("file already has trailing newline, should be unchanged, got FilesChanged=%d", r.FilesChanged)
 	}
 }
 

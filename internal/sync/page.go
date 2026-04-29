@@ -123,7 +123,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	}
 
 	content := frontmatter.BuildOrdered(fm, keyOrder, md)
-	if !strings.HasSuffix(content, "\n") {
+	if len(content) > 0 && content[len(content)-1] != '\n' {
 		content += "\n"
 	}
 
