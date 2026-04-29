@@ -9,6 +9,7 @@ type NotionClient interface {
 	GetDataSource(dataSourceID string) (*notion.DataSourceDetail, error)
 	QueryAllEntries(dataSourceID string) ([]notion.Page, error)
 	GetPage(pageID string) (*notion.Page, error)
+	UpdatePage(pageID string, properties map[string]interface{}) (*notion.Page, error)
 	FetchAllBlocks(blockID string) ([]notion.Block, error)
 	FetchBlockTree(pageID string, progress func(fetched, found int)) (*notion.BlockTree, error)
 }

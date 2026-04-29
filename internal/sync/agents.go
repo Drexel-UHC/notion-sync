@@ -58,6 +58,7 @@ notion-frozen-at: "<RFC 3339 — when this file was last written>"
 notion-last-edited: "<RFC 3339 — Notion's last_edited_time>"
 notion-database-id: "<database-uuid>"   # only present for database entries
 # notion-deleted: true                  # only present if the entry was removed in Notion (soft delete)
+# notion-last-pushed: "<RFC 3339>"      # only present after a push — when properties were last written back
 
 # ... all Notion properties below ...
 Title Property: "Page Name"
@@ -70,23 +71,23 @@ PDF:
 
 ### Property → frontmatter mapping
 
-| Notion type                     | Frontmatter value                          |
-| ------------------------------- | ------------------------------------------ |
-| ` + "`title`" + `                         | filename (database entries) or ` + "`title`" + ` key (pages) |
-| ` + "`rich_text`" + `                     | plain markdown string                      |
-| ` + "`number`" + `                        | number or ` + "`null`" + `                            |
-| ` + "`select`" + `                        | option name or ` + "`null`" + `                       |
-| ` + "`multi_select`" + `                  | array of option names                      |
-| ` + "`status`" + `                        | status name or ` + "`null`" + `                       |
-| ` + "`date`" + `                          | ` + "`start`" + ` or ` + "`start → end`" + `                     |
-| ` + "`checkbox`" + `                      | ` + "`true`" + ` or ` + "`false`" + `                            |
-| ` + "`url`" + ` / ` + "`email`" + ` / ` + "`phone_number`" + ` | string or ` + "`null`" + `                            |
-| ` + "`relation`" + `                      | array of page IDs                          |
-| ` + "`people`" + `                        | array of names (or IDs as fallback)        |
-| ` + "`files`" + `                         | array of URLs (see "File URLs" below)      |
-| ` + "`created_time`" + ` / ` + "`last_edited_time`" + ` | RFC 3339 timestamp                |
-| ` + "`unique_id`" + `                     | ` + "`PREFIX-N`" + ` or ` + "`N`" + `                            |
-| ` + "`created_by`" + ` / ` + "`last_edited_by`" + ` | user name (or ID as fallback)        |
+| Notion type                     | Frontmatter value                          | Pushable? |
+| ------------------------------- | ------------------------------------------ | --------- |
+| ` + "`title`" + `                         | filename (database entries) or ` + "`title`" + ` key (pages) | no |
+| ` + "`rich_text`" + `                     | plain markdown string                      | yes |
+| ` + "`number`" + `                        | number or ` + "`null`" + `                            | yes |
+| ` + "`select`" + `                        | option name or ` + "`null`" + `                       | yes |
+| ` + "`multi_select`" + `                  | array of option names                      | yes |
+| ` + "`status`" + `                        | status name or ` + "`null`" + `                       | yes |
+| ` + "`date`" + `                          | ` + "`start`" + ` or ` + "`start → end`" + `                     | yes |
+| ` + "`checkbox`" + `                      | ` + "`true`" + ` or ` + "`false`" + `                            | yes |
+| ` + "`url`" + ` / ` + "`email`" + ` / ` + "`phone_number`" + ` | string or ` + "`null`" + `                            | yes |
+| ` + "`relation`" + `                      | array of page IDs                          | yes |
+| ` + "`people`" + `                        | array of names (or IDs as fallback)        | no — Notion-managed |
+| ` + "`files`" + `                         | array of URLs (see "File URLs" below)      | no — Notion-managed |
+| ` + "`created_time`" + ` / ` + "`last_edited_time`" + ` | RFC 3339 timestamp                | no — read-only |
+| ` + "`unique_id`" + `                     | ` + "`PREFIX-N`" + ` or ` + "`N`" + `                            | no — read-only |
+| ` + "`created_by`" + ` / ` + "`last_edited_by`" + ` | user name (or ID as fallback)        | no — read-only |
 
 Skipped (not in frontmatter): ` + "`formula`" + `, ` + "`rollup`" + `, ` + "`button`" + `, ` + "`verification`" + ` — they're computed or non-portable.
 
@@ -150,6 +151,18 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 - ` + "`refresh --force`" + ` resyncs every entry regardless of timestamp.
 - ` + "`refresh --ids id1,id2`" + ` resyncs specific pages by ID.
 - ` + "`clean <folder>`" + ` strips presigned URLs from existing files **without** any API call — used as a one-time backfill after upgrading.
+
+## Push semantics (writing local changes back to Notion)
+
+` + "`notion-sync push <folder>`" + ` is the reverse direction: it reads frontmatter from local ` + "`.md`" + ` files and writes property changes back to Notion. **Page body content is never modified.**
+
+Key facts for downstream agents:
+
+- Only **pushable** properties (see table above) are written back. Notion-managed fields (` + "`people`" + `, ` + "`files`" + `, ` + "`created_time`" + `, etc.) are silently skipped even if present in frontmatter.
+- **Conflict detection**: before pushing, the tool compares the local ` + "`notion-last-edited`" + ` timestamp with Notion's current ` + "`last_edited_time`" + `. If they differ (someone edited in Notion since last sync), the file is skipped and reported as a conflict. Use ` + "`--force`" + ` to overwrite.
+- After a successful push, the tool writes ` + "`notion-last-pushed: <timestamp>`" + ` into the file's frontmatter and updates ` + "`notion-last-edited`" + ` to the post-push value returned by Notion.
+- Files with ` + "`notion-deleted: true`" + ` are never pushed.
+- ` + "`push --dry-run`" + ` reports what would be pushed without making any Notion API calls.
 `
 
 // WriteAgentsMD writes the generated AGENTS.md to the workspace root.

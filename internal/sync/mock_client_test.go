@@ -8,11 +8,17 @@ import (
 
 // mockNotionClient is a test double that returns pre-configured data by ID.
 type mockNotionClient struct {
-	databases   map[string]*notion.Database
-	dataSources map[string]*notion.DataSourceDetail
-	entries     map[string][]notion.Page // keyed by dataSourceID
-	pages       map[string]*notion.Page
-	blocks      map[string][]notion.Block // keyed by blockID
+	databases      map[string]*notion.Database
+	dataSources    map[string]*notion.DataSourceDetail
+	entries        map[string][]notion.Page // keyed by dataSourceID
+	pages          map[string]*notion.Page
+	blocks         map[string][]notion.Block // keyed by blockID
+	updateRequests []updateRequest           // recorded UpdatePage calls
+}
+
+type updateRequest struct {
+	PageID     string
+	Properties map[string]interface{}
 }
 
 func newMockClient() *mockNotionClient {
@@ -50,6 +56,15 @@ func (m *mockNotionClient) QueryAllEntries(dataSourceID string) ([]notion.Page, 
 }
 
 func (m *mockNotionClient) GetPage(pageID string) (*notion.Page, error) {
+	page, ok := m.pages[pageID]
+	if !ok {
+		return nil, fmt.Errorf("page %s not found", pageID)
+	}
+	return page, nil
+}
+
+func (m *mockNotionClient) UpdatePage(pageID string, properties map[string]interface{}) (*notion.Page, error) {
+	m.updateRequests = append(m.updateRequests, updateRequest{PageID: pageID, Properties: properties})
 	page, ok := m.pages[pageID]
 	if !ok {
 		return nil, fmt.Errorf("page %s not found", pageID)

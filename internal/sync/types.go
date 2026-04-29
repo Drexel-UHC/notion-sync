@@ -64,4 +64,27 @@ const (
 	PhaseStaleDetected = "stale-detected"
 	PhaseImporting     = "importing"
 	PhaseComplete      = "complete"
+	PhasePushScanning  = "push-scanning"
+	PhasePushing       = "pushing"
 )
+
+// PushOptions contains options for pushing local frontmatter changes to Notion.
+type PushOptions struct {
+	Client     NotionClient
+	FolderPath string
+	Force      bool // skip conflict check
+	DryRun     bool // report planned changes without writing
+}
+
+// PushResult contains the result of a push operation.
+type PushResult struct {
+	Title         string
+	FolderPath    string
+	Total         int
+	Pushed        int
+	Skipped       int
+	Conflicts     int
+	Failed        int
+	Errors        []string
+	ConflictFiles []string
+}

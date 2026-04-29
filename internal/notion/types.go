@@ -4,13 +4,21 @@ import "time"
 
 // Database represents a Notion database response.
 type Database struct {
-	Object      string       `json:"object"`
-	ID          string       `json:"id"`
-	CreatedTime time.Time    `json:"created_time"`
-	LastEdited  time.Time    `json:"last_edited_time"`
-	Title       []RichText   `json:"title"`
-	URL         string       `json:"url"`
-	DataSources []DataSource `json:"data_sources,omitempty"`
+	Object      string                      `json:"object"`
+	ID          string                      `json:"id"`
+	CreatedTime time.Time                   `json:"created_time"`
+	LastEdited  time.Time                   `json:"last_edited_time"`
+	Title       []RichText                  `json:"title"`
+	URL         string                      `json:"url"`
+	DataSources []DataSource                `json:"data_sources,omitempty"`
+	Properties  map[string]DatabaseProperty `json:"properties,omitempty"`
+}
+
+// DatabaseProperty represents a property schema entry in a database.
+type DatabaseProperty struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // DataSource represents a data source reference within a database.
