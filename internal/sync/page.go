@@ -16,12 +16,13 @@ import (
 
 // FreezePageOptions contains options for freezing a page.
 type FreezePageOptions struct {
-	Client       NotionClient
-	NotionID     string
-	OutputFolder string
-	DatabaseID   string
-	Page         *notion.Page // Pre-fetched page (optional)
-	Force        bool         // Skip timestamp check and always re-freeze
+	Client         NotionClient
+	NotionID       string
+	OutputFolder   string
+	DatabaseID     string
+	Page           *notion.Page // Pre-fetched page (optional)
+	Force          bool         // Skip timestamp check and always re-freeze
+	StripPresigned bool         // Strip rotating AWS pre-signed query strings from file URLs
 }
 
 // FreezePage fetches a page from Notion and writes it as a Markdown file.
@@ -90,7 +91,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	blocks := tree.Children[opts.NotionID]
 
 	// Convert blocks to markdown using cached tree (no more API calls)
-	ctx := &markdown.ConvertContext{Client: &markdown.CachedBlockFetcher{Tree: tree}, IndentLevel: 0}
+	ctx := &markdown.ConvertContext{Client: &markdown.CachedBlockFetcher{Tree: tree}, IndentLevel: 0, StripPresigned: opts.StripPresigned}
 	md, err := markdown.ConvertBlocksToMarkdown(blocks, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("convert blocks: %w", err)
@@ -109,7 +110,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 	// Map database entry properties to frontmatter
 	if opts.DatabaseID != "" {
-		mapPropertiesToFrontmatter(page.Properties, fm)
+		mapPropertiesToFrontmatter(page.Properties, fm, opts.StripPresigned)
 	}
 
 	// Define key order for consistent output
@@ -145,9 +146,10 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 
 // StandalonePageImportOptions contains options for importing a standalone page.
 type StandalonePageImportOptions struct {
-	Client       NotionClient
-	PageID       string
-	OutputFolder string
+	Client         NotionClient
+	PageID         string
+	OutputFolder   string
+	StripPresigned bool
 }
 
 // FreezeStandalonePage imports a standalone Notion page (not a database entry).
@@ -177,11 +179,12 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 	}
 
 	result, err := FreezePage(FreezePageOptions{
-		Client:       opts.Client,
-		NotionID:     opts.PageID,
-		OutputFolder: folderPath,
-		DatabaseID:   "", // standalone page — no database
-		Page:         page,
+		Client:         opts.Client,
+		NotionID:       opts.PageID,
+		OutputFolder:   folderPath,
+		DatabaseID:     "", // standalone page — no database
+		Page:           page,
+		StripPresigned: opts.StripPresigned,
 	})
 	if err != nil {
 		return nil, err
@@ -199,9 +202,9 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
-	// Write CLAUDE.md at workspace root
-	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Write AGENTS.md at workspace root
+	if err := WriteAgentsMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	result.FolderPath = folderPath
@@ -210,9 +213,10 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 
 // RefreshStandalonePageOptions contains options for refreshing a standalone page.
 type RefreshStandalonePageOptions struct {
-	Client     NotionClient
-	FolderPath string
-	Force      bool
+	Client         NotionClient
+	FolderPath     string
+	Force          bool
+	StripPresigned bool
 }
 
 // RefreshStandalonePage refreshes a previously imported standalone page.
@@ -227,17 +231,18 @@ func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult
 
 	workspacePath := filepath.Dir(filepath.Dir(opts.FolderPath)) // pages/<folder> → workspace
 
-	// Backfill CLAUDE.md at workspace root
-	if err := WriteClaudeMD(workspacePath); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Backfill AGENTS.md at workspace root
+	if err := WriteAgentsMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	result, err := FreezePage(FreezePageOptions{
-		Client:       opts.Client,
-		NotionID:     meta.PageID,
-		OutputFolder: opts.FolderPath,
-		DatabaseID:   "",
-		Force:        opts.Force,
+		Client:         opts.Client,
+		NotionID:       meta.PageID,
+		OutputFolder:   opts.FolderPath,
+		DatabaseID:     "",
+		Force:          opts.Force,
+		StripPresigned: opts.StripPresigned,
 	})
 	if err != nil {
 		return nil, err
@@ -261,7 +266,7 @@ func getPageTitle(page *notion.Page) string {
 	return "Untitled"
 }
 
-func mapPropertiesToFrontmatter(properties map[string]notion.Property, fm map[string]interface{}) {
+func mapPropertiesToFrontmatter(properties map[string]notion.Property, fm map[string]interface{}, stripPresigned bool) {
 	for key, prop := range properties {
 		switch prop.Type {
 		case "title":
@@ -368,11 +373,18 @@ func mapPropertiesToFrontmatter(properties map[string]notion.Property, fm map[st
 		case "files":
 			var urls []interface{}
 			for _, f := range prop.Files {
+				var u string
 				if f.Type == "file" && f.File != nil {
-					urls = append(urls, f.File.URL)
+					u = f.File.URL
 				} else if f.External != nil {
-					urls = append(urls, f.External.URL)
+					u = f.External.URL
+				} else {
+					continue
 				}
+				if stripPresigned {
+					u = notion.StripPresignedParams(u)
+				}
+				urls = append(urls, u)
 			}
 			if len(urls) == 0 {
 				fm[key] = []interface{}{}

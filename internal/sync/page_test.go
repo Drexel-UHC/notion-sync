@@ -163,7 +163,7 @@ func TestMapPropertiesToFrontmatter(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	// Title should be included in frontmatter
 	if fm["Name"] != "Test" {
@@ -256,7 +256,7 @@ func TestMapPropertiesToFrontmatter_Files(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	// Check files
 	files, ok := fm["Attachments"].([]interface{})
@@ -283,6 +283,45 @@ func TestMapPropertiesToFrontmatter_Files(t *testing.T) {
 	}
 }
 
+func TestMapPropertiesToFrontmatter_Files_StripPresigned(t *testing.T) {
+	presigned := "https://prod-files-secure.s3.us-west-2.amazonaws.com/abc/uuid/file.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260428T150234Z&X-Amz-Signature=9af1bc"
+	external := "https://my-cdn.example.org/logo.png"
+
+	props := map[string]notion.Property{
+		"PDF": {
+			Type: "files",
+			Files: []notion.File{
+				{Name: "file.pdf", Type: "file", File: &notion.FileURL{URL: presigned}},
+				{Name: "logo.png", Type: "external", External: &notion.ExternalURL{URL: external}},
+			},
+		},
+	}
+
+	// Strip=true: presigned URL is reduced to its stable path; external URL untouched.
+	fm := map[string]interface{}{}
+	mapPropertiesToFrontmatter(props, fm, true)
+
+	files, ok := fm["PDF"].([]interface{})
+	if !ok || len(files) != 2 {
+		t.Fatalf("PDF: unexpected value: %#v", fm["PDF"])
+	}
+	wantStripped := "https://prod-files-secure.s3.us-west-2.amazonaws.com/abc/uuid/file.pdf"
+	if files[0] != wantStripped {
+		t.Errorf("PDF[0] = %v, want %v", files[0], wantStripped)
+	}
+	if files[1] != external {
+		t.Errorf("PDF[1] = %v, want %v (external URL must not be modified)", files[1], external)
+	}
+
+	// Strip=false: opt-out preserves the full presigned URL.
+	fm2 := map[string]interface{}{}
+	mapPropertiesToFrontmatter(props, fm2, false)
+	files2 := fm2["PDF"].([]interface{})
+	if files2[0] != presigned {
+		t.Errorf("with strip=false, PDF[0] should be unchanged, got %v", files2[0])
+	}
+}
+
 func TestMapPropertiesToFrontmatter_PeopleFallbackToID(t *testing.T) {
 	props := map[string]notion.Property{
 		"Reviewers": {
@@ -294,7 +333,7 @@ func TestMapPropertiesToFrontmatter_PeopleFallbackToID(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	people, ok := fm["Reviewers"].([]interface{})
 	if !ok {
@@ -322,7 +361,7 @@ func TestMapPropertiesToFrontmatter_UniqueID(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	if fm["ID"] != "TASK-42" {
 		t.Errorf("ID = %v, want TASK-42", fm["ID"])
@@ -354,7 +393,7 @@ func TestMapPropertiesToFrontmatter_CreatedBy(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	if fm["Creator"] != "Alice" {
 		t.Errorf("Creator = %v, want Alice", fm["Creator"])
@@ -386,7 +425,7 @@ func TestMapPropertiesToFrontmatter_LastEditedBy(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	if fm["Editor"] != "Bob" {
 		t.Errorf("Editor = %v, want Bob", fm["Editor"])
@@ -406,7 +445,7 @@ func TestMapPropertiesToFrontmatter_UnknownTypeSkipped(t *testing.T) {
 	}
 
 	fm := map[string]interface{}{}
-	mapPropertiesToFrontmatter(props, fm)
+	mapPropertiesToFrontmatter(props, fm, false)
 
 	if len(fm) != 0 {
 		t.Errorf("expected empty frontmatter for unknown types, got %v", fm)

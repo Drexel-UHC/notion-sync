@@ -2,6 +2,15 @@
 
 CLI tool that syncs Notion databases to local Markdown files with YAML frontmatter.
 
+## Two distinct agent docs in this repo — don't confuse them
+
+| File | Audience | Lives at (source of truth) | Lives at (deployed bundle) |
+| --- | --- | --- | --- |
+| **`CLAUDE.md`** (this file) | Agents working **on** notion-sync's code | repo root — `./CLAUDE.md` | not deployed; dev-only |
+| **`AGENTS.md`** (generated) | Agents working **with** the synced output (downstream consumers) | source const in `internal/sync/agents.go` | written to the user's workspace root on every `import` / `refresh` (e.g. `./notion/AGENTS.md`) |
+
+When the user says "the agent docs" or asks about downstream documentation, they almost always mean **`AGENTS.md`**. To change what downstream agents see, edit the `agentsMDContent` const in `internal/sync/agents.go` — it gets emitted by `WriteAgentsMD` (idempotent, never overwrites a user-edited copy).
+
 ## Rules
 
 - Be Concise - i like quick responses to iterate quickly. Save long responses for when asked about details or planning.
