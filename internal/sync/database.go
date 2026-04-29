@@ -158,9 +158,9 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
-	// Write CLAUDE.md at workspace root (only on first import, won't overwrite)
-	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Write AGENTS.md at workspace root (only on first import, won't overwrite)
+	if err := WriteAgentsMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	if onProgress != nil {
@@ -245,9 +245,9 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 
 	workspacePath := filepath.Dir(opts.FolderPath)
 
-	// Ensure CLAUDE.md exists at workspace root (backfill for older imports)
-	if err := WriteClaudeMD(workspacePath); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Ensure AGENTS.md exists at workspace root (backfill for older imports)
+	if err := WriteAgentsMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	// Clean up legacy SQLite database files (removed in v0.3)

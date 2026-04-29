@@ -202,9 +202,9 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
-	// Write CLAUDE.md at workspace root
-	if err := WriteClaudeMD(opts.OutputFolder); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Write AGENTS.md at workspace root
+	if err := WriteAgentsMD(opts.OutputFolder); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	result.FolderPath = folderPath
@@ -231,9 +231,9 @@ func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult
 
 	workspacePath := filepath.Dir(filepath.Dir(opts.FolderPath)) // pages/<folder> → workspace
 
-	// Backfill CLAUDE.md at workspace root
-	if err := WriteClaudeMD(workspacePath); err != nil {
-		log.Printf("warning: failed to write CLAUDE.md: %v", err)
+	// Backfill AGENTS.md at workspace root
+	if err := WriteAgentsMD(workspacePath); err != nil {
+		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
 	result, err := FreezePage(FreezePageOptions{
