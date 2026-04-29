@@ -77,7 +77,7 @@ Commands:
   push      Push local frontmatter property changes back to Notion (properties only, no body)
             Refuses to push files where Notion has been edited since last sync, unless --force.
             --force, -f    Push even if Notion has newer edits (overwrites Notion-side changes)
-            --dry-run      Show what would be pushed without writing to Notion
+            --dry-run      Show what would be pushed without writing to Notion (still reads from Notion for conflict detection)
   list      List all synced databases and pages in a folder
   clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
             Useful one-time backfill after upgrading. No API calls.
@@ -415,7 +415,7 @@ func runPush(args []string) error {
 	apiKey := fs.String("api-key", "", "Notion API key")
 	force := fs.Bool("force", false, "Push even if Notion has newer edits")
 	forceShort := fs.Bool("f", false, "Push even if Notion has newer edits (shorthand)")
-	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing")
+	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing to Notion")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -479,7 +479,11 @@ func runPush(args []string) error {
 		fmt.Printf("Done: \"%s\"\n", result.Title)
 	}
 	fmt.Printf("  Total:     %d\n", result.Total)
-	fmt.Printf("  Pushed:    %d\n", result.Pushed)
+	if *dryRun {
+		fmt.Printf("  Would push: %d\n", result.Pushed)
+	} else {
+		fmt.Printf("  Pushed:     %d\n", result.Pushed)
+	}
 	fmt.Printf("  Skipped:   %d\n", result.Skipped)
 
 	if result.Conflicts > 0 {
@@ -499,11 +503,14 @@ func runPush(args []string) error {
 	if result.Conflicts > 0 {
 		return fmt.Errorf("%d file(s) have conflicts; use --force to overwrite", result.Conflicts)
 	}
+	if result.Failed > 0 {
+		return fmt.Errorf("%d file(s) failed to push", result.Failed)
+	}
 
 	return nil
 }
 
-//// 2.5 List ----
+//// 2.4 List ----
 
 func runList(args []string) error {
 	outputFolder := "./notion"

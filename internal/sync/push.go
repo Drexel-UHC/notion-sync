@@ -99,7 +99,14 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			notionPage = page
 		}
 
-		properties := buildPropertyPayload(f.fm, database.Properties)
+		properties, validationErrs := buildPropertyPayload(f.fm, database.Properties)
+		if len(validationErrs) > 0 {
+			result.Failed++
+			for _, e := range validationErrs {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", filepath.Base(f.path), e))
+			}
+			continue
+		}
 		if len(properties) == 0 {
 			result.Skipped++
 			continue
@@ -144,38 +151,46 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 
 // buildPropertyPayload constructs the Notion API property update payload from frontmatter.
 // Uses the database schema to determine property types; skips read-only / Notion-native properties.
-func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.DatabaseProperty) map[string]interface{} {
-	notionKeys := map[string]bool{
-		"notion-id": true, "notion-url": true, "notion-frozen-at": true,
-		"notion-last-edited": true, "notion-database-id": true,
-		"notion-deleted": true, "notion-last-pushed": true,
-	}
-	skipTypes := map[string]bool{
-		"title": true, "people": true,
-		"created_time": true, "last_edited_time": true,
-		"created_by": true, "last_edited_by": true,
-		"formula": true, "rollup": true, "button": true,
-		"unique_id": true, "verification": true, "files": true,
-	}
+var pushNotionKeys = map[string]bool{
+	"notion-id": true, "notion-url": true, "notion-frozen-at": true,
+	"notion-last-edited": true, "notion-database-id": true,
+	"notion-deleted": true, "notion-last-pushed": true,
+}
 
+var pushSkipTypes = map[string]bool{
+	"title": true, "people": true,
+	"created_time": true, "last_edited_time": true,
+	"created_by": true, "last_edited_by": true,
+	"formula": true, "rollup": true, "button": true,
+	"unique_id": true, "verification": true, "files": true,
+}
+
+func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.DatabaseProperty) (map[string]interface{}, []string) {
 	result := make(map[string]interface{})
+	var errs []string
 	for key, val := range fm {
-		if notionKeys[key] {
+		if pushNotionKeys[key] {
 			continue
 		}
 		prop, ok := schema[key]
 		if !ok {
 			continue
 		}
-		if skipTypes[prop.Type] {
+		if pushSkipTypes[prop.Type] {
 			continue
+		}
+		if prop.Type == "rich_text" {
+			if s := coerceString(val); len(s) > 2000 {
+				errs = append(errs, fmt.Sprintf("%q exceeds Notion's 2000-char limit for rich_text (got %d chars)", key, len(s)))
+				continue
+			}
 		}
 		payload := buildPropertyValue(prop.Type, val)
 		if payload != nil {
 			result[key] = payload
 		}
 	}
-	return result
+	return result, errs
 }
 
 func buildPropertyValue(propType string, val interface{}) interface{} {
@@ -334,11 +349,14 @@ func updateAfterPush(filePath, newLastEdited, pushedAt string) error {
 	s := strings.ReplaceAll(string(content), "\r\n", "\n")
 
 	// Update notion-last-edited if we have a new value from Notion.
+	// Search for "\nnotion-last-edited:" (newline-anchored) to avoid matching
+	// the substring inside a property value on a different line.
 	if newLastEdited != "" {
-		if idx := strings.Index(s, "notion-last-edited:"); idx != -1 {
-			end := strings.Index(s[idx:], "\n")
+		if idx := strings.Index(s, "\nnotion-last-edited:"); idx != -1 {
+			keyStart := idx + 1 // skip the leading \n
+			end := strings.Index(s[keyStart:], "\n")
 			if end != -1 {
-				s = s[:idx] + "notion-last-edited: " + newLastEdited + s[idx+end:]
+				s = s[:keyStart] + "notion-last-edited: " + newLastEdited + s[keyStart+end:]
 			}
 		}
 	}
@@ -346,19 +364,21 @@ func updateAfterPush(filePath, newLastEdited, pushedAt string) error {
 	pushedLine := "notion-last-pushed: " + pushedAt
 
 	// Update existing notion-last-pushed.
-	if idx := strings.Index(s, "notion-last-pushed:"); idx != -1 {
-		end := strings.Index(s[idx:], "\n")
+	if idx := strings.Index(s, "\nnotion-last-pushed:"); idx != -1 {
+		keyStart := idx + 1
+		end := strings.Index(s[keyStart:], "\n")
 		if end != -1 {
-			s = s[:idx] + pushedLine + s[idx+end:]
+			s = s[:keyStart] + pushedLine + s[keyStart+end:]
 		}
 		return os.WriteFile(filePath, []byte(s), 0644)
 	}
 
 	// Insert after notion-last-edited.
-	if idx := strings.Index(s, "notion-last-edited:"); idx != -1 {
-		end := strings.Index(s[idx:], "\n")
+	if idx := strings.Index(s, "\nnotion-last-edited:"); idx != -1 {
+		keyStart := idx + 1
+		end := strings.Index(s[keyStart:], "\n")
 		if end != -1 {
-			insertAt := idx + end
+			insertAt := keyStart + end
 			s = s[:insertAt] + "\n" + pushedLine + s[insertAt:]
 			return os.WriteFile(filePath, []byte(s), 0644)
 		}

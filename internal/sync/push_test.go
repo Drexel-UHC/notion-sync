@@ -22,7 +22,7 @@ func TestBuildPropertyPayload_SkipsNotionKeys(t *testing.T) {
 		"notion-last-pushed": "2024-01-01T00:00:00Z",
 	}
 	schema := map[string]notion.DatabaseProperty{}
-	got := buildPropertyPayload(fm, schema)
+	got, _ := buildPropertyPayload(fm, schema)
 	if len(got) != 0 {
 		t.Errorf("expected empty payload, got %v", got)
 	}
@@ -47,7 +47,7 @@ func TestBuildPropertyPayload_SkipsReadOnlyTypes(t *testing.T) {
 		"Rollup": "sum", "UniqueID": "ID-1",
 		"Attachments": []interface{}{"url"},
 	}
-	got := buildPropertyPayload(fm, schema)
+	got, _ := buildPropertyPayload(fm, schema)
 	if len(got) != 0 {
 		t.Errorf("expected empty payload for read-only types, got %v", got)
 	}
@@ -55,9 +55,24 @@ func TestBuildPropertyPayload_SkipsReadOnlyTypes(t *testing.T) {
 
 func TestBuildPropertyPayload_SkipsUnknownProperties(t *testing.T) {
 	fm := map[string]interface{}{"SomeProp": "value"}
-	got := buildPropertyPayload(fm, map[string]notion.DatabaseProperty{})
+	got, _ := buildPropertyPayload(fm, map[string]notion.DatabaseProperty{})
 	if len(got) != 0 {
 		t.Errorf("expected empty payload for unknown property, got %v", got)
+	}
+}
+
+func TestBuildPropertyPayload_RichTextTooLong(t *testing.T) {
+	schema := map[string]notion.DatabaseProperty{"Notes": {Type: "rich_text"}}
+	fm := map[string]interface{}{"Notes": strings.Repeat("x", 2001)}
+	got, errs := buildPropertyPayload(fm, schema)
+	if len(got) != 0 {
+		t.Error("expected property to be excluded from payload")
+	}
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 validation error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0], "2000-char limit") {
+		t.Errorf("unexpected error message: %s", errs[0])
 	}
 }
 
@@ -398,6 +413,38 @@ func TestPushDatabase_WritesLastPushed(t *testing.T) {
 	got, _ := os.ReadFile(filePath)
 	if !strings.Contains(string(got), "notion-last-pushed:") {
 		t.Error("expected notion-last-pushed to be written to file after push")
+	}
+}
+
+func TestUpdateAfterPush_DoesNotCorruptValueContainingKey(t *testing.T) {
+	dir := t.TempDir()
+	// A property value contains the substring "notion-last-edited:" — the function
+	// must not match inside this value when updating the actual key.
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"Notes: \"see notion-last-edited: for tracking\"\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"---\n"
+	filePath := filepath.Join(dir, "page.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := updateAfterPush(filePath, "2024-06-01T00:00:00Z", "2024-06-01T01:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(filePath)
+	s := string(got)
+
+	if !strings.Contains(s, "Notes: \"see notion-last-edited: for tracking\"") {
+		t.Error("Notes value was corrupted")
+	}
+	if !strings.Contains(s, "notion-last-edited: 2024-06-01T00:00:00Z") {
+		t.Error("notion-last-edited was not updated")
+	}
+	if !strings.Contains(s, "notion-last-pushed: 2024-06-01T01:00:00Z") {
+		t.Error("notion-last-pushed was not written")
 	}
 }
 
