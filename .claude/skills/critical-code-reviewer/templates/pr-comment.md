@@ -32,7 +32,7 @@ The structure adapts based on the verdict:
 
 ---
 
-Review feedback assisted by the [critical-code-reviewer skill](https://github.com/posit-dev/skills/blob/main/posit-dev/critical-code-reviewer/SKILL.md).
+Review feedback assisted by the [critical-code-reviewer skill](https://github.com/Drexel-UHC/notion-sync/blob/main/.claude/skills/critical-code-reviewer/SKILL.md).
 ```
 
 ### When verdict is **Approve**
@@ -56,7 +56,7 @@ Review feedback assisted by the [critical-code-reviewer skill](https://github.co
 
 ---
 
-Review feedback assisted by the [critical-code-reviewer skill](https://github.com/posit-dev/skills/blob/main/posit-dev/critical-code-reviewer/SKILL.md).
+Review feedback assisted by the [critical-code-reviewer skill](https://github.com/Drexel-UHC/notion-sync/blob/main/.claude/skills/critical-code-reviewer/SKILL.md).
 ```
 
 When approved, there are no **Action Items** — everything remaining is optional. Use **Suggestions** for cosmetic or non-breaking recommendations. If there are no suggestions either, omit that section entirely.
