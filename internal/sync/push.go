@@ -158,7 +158,7 @@ var pushNotionKeys = map[string]bool{
 }
 
 var pushSkipTypes = map[string]bool{
-	"title": true, "people": true,
+	"people":       true,
 	"created_time": true, "last_edited_time": true,
 	"created_by": true, "last_edited_by": true,
 	"formula": true, "rollup": true, "button": true,
@@ -179,9 +179,9 @@ func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.Da
 		if pushSkipTypes[prop.Type] {
 			continue
 		}
-		if prop.Type == "rich_text" {
+		if prop.Type == "rich_text" || prop.Type == "title" {
 			if s := coerceString(val); len(s) > 2000 {
-				errs = append(errs, fmt.Sprintf("%q exceeds Notion's 2000-char limit for rich_text (got %d chars)", key, len(s)))
+				errs = append(errs, fmt.Sprintf("%q exceeds Notion's 2000-char limit for %s (got %d chars)", key, prop.Type, len(s)))
 				continue
 			}
 		}
@@ -195,6 +195,17 @@ func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.Da
 
 func buildPropertyValue(propType string, val interface{}) interface{} {
 	switch propType {
+	case "title":
+		s := coerceString(val)
+		return map[string]interface{}{
+			"title": []interface{}{
+				map[string]interface{}{
+					"type": "text",
+					"text": map[string]interface{}{"content": s},
+				},
+			},
+		}
+
 	case "rich_text":
 		s := coerceString(val)
 		return map[string]interface{}{
