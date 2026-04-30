@@ -76,6 +76,43 @@ func TestBuildPropertyPayload_RichTextTooLong(t *testing.T) {
 	}
 }
 
+func TestBuildPropertyPayload_IncludesTitle(t *testing.T) {
+	schema := map[string]notion.DatabaseProperty{
+		"Metric Name": {Type: "title"},
+	}
+	fm := map[string]interface{}{
+		"Metric Name": "Prevalence Estimate",
+	}
+	got, errs := buildPropertyPayload(fm, schema)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	payload, ok := got["Metric Name"]
+	if !ok {
+		t.Fatalf("expected 'Metric Name' in payload, got %v", got)
+	}
+	tt := payload.(map[string]interface{})["title"].([]interface{})
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "Prevalence Estimate" {
+		t.Errorf("expected 'Prevalence Estimate', got %v", text)
+	}
+}
+
+func TestBuildPropertyPayload_TitleTooLong(t *testing.T) {
+	schema := map[string]notion.DatabaseProperty{"Metric Name": {Type: "title"}}
+	fm := map[string]interface{}{"Metric Name": strings.Repeat("x", 2001)}
+	got, errs := buildPropertyPayload(fm, schema)
+	if len(got) != 0 {
+		t.Error("expected over-limit title to be excluded from payload")
+	}
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 validation error, got %d", len(errs))
+	}
+	if !strings.Contains(errs[0], "2000-char limit") {
+		t.Errorf("unexpected error message: %s", errs[0])
+	}
+}
+
 func TestBuildPropertyValue_RichText(t *testing.T) {
 	got := buildPropertyValue("rich_text", "hello world")
 	rt := got.(map[string]interface{})["rich_text"].([]interface{})
@@ -85,6 +122,71 @@ func TestBuildPropertyValue_RichText(t *testing.T) {
 	text := rt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
 	if text != "hello world" {
 		t.Errorf("expected 'hello world', got %v", text)
+	}
+}
+
+func TestBuildPropertyValue_Title(t *testing.T) {
+	got := buildPropertyValue("title", "Prevalence Estimate")
+	tt := got.(map[string]interface{})["title"].([]interface{})
+	if len(tt) != 1 {
+		t.Fatalf("expected 1 title item, got %d", len(tt))
+	}
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "Prevalence Estimate" {
+		t.Errorf("expected 'Prevalence Estimate', got %v", text)
+	}
+}
+
+// Empty string in the title frontmatter key is intentionally pushed as a
+// single empty rich-text item, mirroring rich_text behavior. Locks in this
+// choice so it doesn't silently drift to {"title": []} (Notion's "clear").
+func TestBuildPropertyValue_TitleEmptyString(t *testing.T) {
+	got := buildPropertyValue("title", "")
+	tt := got.(map[string]interface{})["title"].([]interface{})
+	if len(tt) != 1 {
+		t.Fatalf("expected 1 title item for empty string, got %d", len(tt))
+	}
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "" {
+		t.Errorf("expected empty content, got %q", text)
+	}
+}
+
+// Nil flows through coerceString → "" and is pushed as an empty title item,
+// same as rich_text. Locks in the behavior.
+func TestBuildPropertyPayload_TitleNilCoercesToEmpty(t *testing.T) {
+	schema := map[string]notion.DatabaseProperty{"Metric Name": {Type: "title"}}
+	fm := map[string]interface{}{"Metric Name": nil}
+	got, errs := buildPropertyPayload(fm, schema)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	payload, ok := got["Metric Name"]
+	if !ok {
+		t.Fatalf("expected 'Metric Name' in payload (nil → empty), got %v", got)
+	}
+	tt := payload.(map[string]interface{})["title"].([]interface{})
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "" {
+		t.Errorf("expected empty content for nil title, got %q", text)
+	}
+}
+
+// Known limitation: imported titles encode formatting (bold, links, mentions)
+// as literal markdown via ConvertRichText. Push sends that string as plain
+// text content with no parsing — so a roundtripped title loses its formatting
+// and gains visible asterisks/brackets in Notion. This test pins the current
+// behavior so a regression (or a future fix) is loud.
+func TestBuildPropertyValue_TitleMarkdownIsLiteral(t *testing.T) {
+	in := "**Bold** with [link](https://example.com) and [[notion-id: abc]]"
+	got := buildPropertyValue("title", in)
+	tt := got.(map[string]interface{})["title"].([]interface{})
+	if len(tt) != 1 {
+		t.Fatalf("expected 1 title item, got %d", len(tt))
+	}
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != in {
+		t.Errorf("expected markdown to be sent verbatim as plain text\n  want: %q\n   got: %q", in, text)
 	}
 }
 
@@ -227,6 +329,108 @@ func TestPushDatabase_PushesProperties(t *testing.T) {
 	}
 	if _, ok := req.Properties["Priority"]; !ok {
 		t.Error("expected Priority in payload")
+	}
+}
+
+func TestPushDatabase_PushesTitleRename(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Local edit: typo correction in the title-typed property.
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Metric Name: Prevalence Estimate for Obese\n" +
+		"---\n# Body\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Metric Name": {Type: "title"},
+		},
+	}
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 pushed, got %d", result.Pushed)
+	}
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected 1 UpdatePage call, got %d", len(client.updateRequests))
+	}
+
+	req := client.updateRequests[0]
+	payload, ok := req.Properties["Metric Name"]
+	if !ok {
+		t.Fatalf("expected 'Metric Name' in UpdatePage payload, got %v", req.Properties)
+	}
+	tt := payload.(map[string]interface{})["title"].([]interface{})
+	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "Prevalence Estimate for Obese" {
+		t.Errorf("expected title 'Prevalence Estimate for Obese', got %v", text)
+	}
+}
+
+// Force bypasses the conflict check and still pushes the renamed title —
+// confirms title push composes correctly with --force when Notion is "ahead".
+func TestPushDatabase_ForcePushesTitleRenameOverConflict(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Metric Name: Renamed Locally\n" +
+		"---\n# Body\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Metric Name": {Type: "title"},
+		},
+	}
+	// Notion's timestamp is newer than local — would normally be a conflict.
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-06-01T00:00:00Z",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, Force: true}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 pushed under --force, got %d (conflicts=%d, errors=%v)", result.Pushed, result.Conflicts, result.Errors)
+	}
+	if result.Conflicts != 0 {
+		t.Errorf("expected 0 conflicts under --force, got %d", result.Conflicts)
+	}
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected 1 UpdatePage call, got %d", len(client.updateRequests))
+	}
+	payload, ok := client.updateRequests[0].Properties["Metric Name"]
+	if !ok {
+		t.Fatalf("expected 'Metric Name' in payload, got %v", client.updateRequests[0].Properties)
+	}
+	text := payload.(map[string]interface{})["title"].([]interface{})[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	if text != "Renamed Locally" {
+		t.Errorf("expected 'Renamed Locally', got %v", text)
 	}
 }
 
