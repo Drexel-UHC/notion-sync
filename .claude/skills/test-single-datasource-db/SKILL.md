@@ -92,27 +92,31 @@ For each synced `.md` file, compare the file's modification time (via `stat`) ag
 ### Step 9b: Pick a push test page and snapshot originals
 Pick a page **other than the one edited in Step 4** (call it page B). Read its local `.md` file and record the original values for these properties (you'll need them for Step 9d):
 
-| Property type | Example key in this DB | Why |
+| Property type | Frontmatter key | Why |
 |---|---|---|
-| `title` | (whatever the title property is named) | Regression-protect ref #51 |
-| `rich_text` | any rich_text column | Regression-protect 2000-char guard |
-| `select` | any select column | |
-| `number` | any number column | |
-| `date` | any date column | |
+| `title` | `Name` | Regression-protect ref #51 |
+| `rich_text` | `Description` | Regression-protect 2000-char guard |
+| `select` | `Category` (options: Research, Engineering, Design, Marketing) | |
+| `number` | `Score` | |
+| `date` | `Due Date` | |
 
-If the DB doesn't have a column of one of these types, skip that type and note it in the summary.
+These keys are fixed by the test DB schema (see `.claude/reference/test-databases/single-data-source/setup.md`). If a chosen page B has a null value for any of these (e.g., page 4 has null `Due Date`), pick a different page or note the gap in the summary.
 
 ### Step 9c: Edit page B locally and push
-Edit page B's `.md` file: change the 5 property values in the frontmatter to clearly distinguishable test values (e.g., prefix strings with `e2e-push-test-`, set number to `9999`, set date to `2026-04-30`).
+Edit page B's `.md` file: change the 5 property values in the frontmatter to clearly distinguishable test values:
+- `Name` (title), `Description` (rich_text): prefix with `e2e-push-test-`
+- `Score` (number): `9999`
+- `Due Date` (date): `2026-04-30`
+- `Category` (select): pick a **different existing option** from the schema (Research / Engineering / Design / Marketing — pick whichever is not page B's current value). Do **not** invent a new string — Notion auto-creates select options on push and never garbage-collects them, which would leave cruft in the test DB across runs.
 
 Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
 
 - **Pass criteria:**
   - Exit code 0
-  - Output contains `Pushed:` and `Pushed == Total` (push writes every file by design — not just edited ones)
-  - `Conflicts: 0`, `Failed: 0`
+  - `Pushed >= 1` and `Pushed + Skipped == Total` (push writes every file with a non-empty property payload; `Skipped` only counts files where every property got filtered out by the schema)
+  - Output does **not** contain `Conflicts:` or `Failed:` lines (these are only printed when count > 0; exit 0 already guarantees both are zero)
   - Page B's `.md` now has a `notion-last-pushed:` frontmatter key
-  - Page B's `notion-last-edited:` was updated to a fresh timestamp
+  - Page B's `notion-last-edited:` is **newer than the value snapshotted in Step 9b**
 
 Then use Notion MCP (`notion-fetch` on page B's URL) to verify Notion now reflects each of the 5 edited values.
 
@@ -121,7 +125,7 @@ Restore page B's `.md` frontmatter to the original values recorded in Step 9b. R
 
 `./notion-sync.exe push "./test-output/test database obsdiain complex"`
 
-- **Pass criteria:** exit 0, `Pushed == Total`, `Conflicts: 0`.
+- **Pass criteria:** exit 0, `Pushed + Skipped == Total`, no `Conflicts:` or `Failed:` lines in output.
 
 Use Notion MCP to confirm page B's properties are back to their original values.
 
@@ -135,7 +139,28 @@ Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
   - Output contains `Conflicts: 1` and lists page C's filename under `- <filename>`
   - Notion's actual values for page C are unchanged (verify via MCP — push refuses conflicted files entirely)
 
-After verifying, restore page C's `notion-last-edited:` to its real value (run a `refresh` to repair it cleanly: `./notion-sync.exe refresh "./test-output/test database obsdiain complex" --ids <page-C-id>`).
+> **Expected behavior:** push continues past the conflict and writes every other non-conflicted file's properties back to Notion. This is by design (push writes every file with a non-empty payload). Page C is the only one that's actually skipped; all other pages get re-pushed with their current local values, which already match Notion. Don't be alarmed by the resulting `Pushed:` count.
+
+### Step 9e2: Force-override the conflict
+Page C still has its stale `notion-last-edited:` from the previous step. Re-run push with `--force` to confirm the override path bypasses the conflict check:
+
+`./notion-sync.exe push "./test-output/test database obsdiain complex" --force`
+
+- **Pass criteria:**
+  - Exit code 0
+  - Output starts with `Force pushing properties (ignoring conflicts)...`
+  - No `Conflicts:` line in output (force skips the conflict check entirely)
+  - `Pushed >= 1`, `Pushed + Skipped == Total`
+  - Page C's `notion-last-edited:` is now refreshed to a real Notion timestamp (since `--force` proceeded with the push and `updateAfterPush` rewrote it)
+
+Verify via Notion MCP that page C's properties match the local frontmatter (since page C wasn't otherwise edited, this should be a no-op for property values, but the timestamp should be current).
+
+### Step 9e3: Repair page C state
+After the force push, page C's local frontmatter should already match Notion. Run a refresh to confirm everything is consistent:
+
+`./notion-sync.exe refresh "./test-output/test database obsdiain complex" --ids <page-C-id>`
+
+- **Pass criteria:** updated = 0 or 1 (depends on whether the force-push timestamp drifted), exit 0.
 
 ### Step 9f: Dry-run mode
 Edit page B's `.md` again — change just the `select` value to something like `e2e-dryrun-test`. Run:
@@ -153,7 +178,7 @@ Revert page B's local edit by restoring the original select value (no push neede
 ### Step 10: Revert Notion changes
 Use Notion MCP tools to restore the page edited in Step 4 back to its original property values and content. This keeps the test database clean for the next run.
 
-(Page B and page C are already back to their original states from Steps 9d and 9e.)
+(Page B and page C are already back to their original states from Steps 9d and 9e3.)
 
 ### Step 11: Clean up
 If `--no-cleanup` was passed, **skip this step** and print `Step 11: Skipped (--no-cleanup)`.
