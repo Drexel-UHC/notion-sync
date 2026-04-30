@@ -73,7 +73,7 @@ PDF:
 
 | Notion type                     | Frontmatter value                          | Pushable? |
 | ------------------------------- | ------------------------------------------ | --------- |
-| ` + "`title`" + `                         | filename (database entries) or ` + "`title`" + ` key (pages) | no |
+| ` + "`title`" + `                         | named title-property key in frontmatter (database entries); filename for standalone pages | yes |
 | ` + "`rich_text`" + `                     | plain markdown string                      | yes |
 | ` + "`number`" + `                        | number or ` + "`null`" + `                            | yes |
 | ` + "`select`" + `                        | option name or ` + "`null`" + `                       | yes |
@@ -159,6 +159,7 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 Key facts for downstream agents:
 
 - Only **pushable** properties (see table above) are written back. Notion-managed fields (` + "`people`" + `, ` + "`files`" + `, ` + "`created_time`" + `, etc.) are silently skipped even if present in frontmatter.
+- Title properties are pushable: editing the value of the named title-property in a database entry's frontmatter renames the page in Notion on the next push.
 - **Conflict detection**: before pushing, the tool compares the local ` + "`notion-last-edited`" + ` timestamp with Notion's current ` + "`last_edited_time`" + `. If they differ (someone edited in Notion since last sync), the file is skipped and reported as a conflict. Use ` + "`--force`" + ` to overwrite.
 - After a successful push, the tool writes ` + "`notion-last-pushed: <timestamp>`" + ` into the file's frontmatter and updates ` + "`notion-last-edited`" + ` to the post-push value returned by Notion.
 - Files with ` + "`notion-deleted: true`" + ` are never pushed.

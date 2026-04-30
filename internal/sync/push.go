@@ -195,21 +195,10 @@ func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.Da
 
 func buildPropertyValue(propType string, val interface{}) interface{} {
 	switch propType {
-	case "title":
+	case "title", "rich_text":
 		s := coerceString(val)
 		return map[string]interface{}{
-			"title": []interface{}{
-				map[string]interface{}{
-					"type": "text",
-					"text": map[string]interface{}{"content": s},
-				},
-			},
-		}
-
-	case "rich_text":
-		s := coerceString(val)
-		return map[string]interface{}{
-			"rich_text": []interface{}{
+			propType: []interface{}{
 				map[string]interface{}{
 					"type": "text",
 					"text": map[string]interface{}{"content": s},
