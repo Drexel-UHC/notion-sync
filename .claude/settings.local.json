@@ -17,7 +17,9 @@
       "mcp__notion__API-post-search",
       "mcp__notion__API-retrieve-a-block",
       "mcp__notion__API-patch-page",
-      "Bash"
+      "Bash",
+      "WebSearch",
+      "WebFetch"
     ]
   },
   "enableAllProjectMcpServers": true,
