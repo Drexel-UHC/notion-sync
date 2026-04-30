@@ -1,7 +1,7 @@
 ---
 name: test-single-datasource-db
-description: Run integration test against the single-data-source test database (import, refresh, --ids, --force)
-version: 2.0.0
+description: Run integration test against the single-data-source test database (import, refresh, --ids, --force, push)
+version: 2.1.0
 args: "[--verbose] [--no-cleanup]"
 ---
 
@@ -89,8 +89,71 @@ Grep the synced `.md` files in `./test-output/test database obsdiain complex/` f
 For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
 - **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
 
+### Step 9b: Pick a push test page and snapshot originals
+Pick a page **other than the one edited in Step 4** (call it page B). Read its local `.md` file and record the original values for these properties (you'll need them for Step 9d):
+
+| Property type | Example key in this DB | Why |
+|---|---|---|
+| `title` | (whatever the title property is named) | Regression-protect ref #51 |
+| `rich_text` | any rich_text column | Regression-protect 2000-char guard |
+| `select` | any select column | |
+| `number` | any number column | |
+| `date` | any date column | |
+
+If the DB doesn't have a column of one of these types, skip that type and note it in the summary.
+
+### Step 9c: Edit page B locally and push
+Edit page B's `.md` file: change the 5 property values in the frontmatter to clearly distinguishable test values (e.g., prefix strings with `e2e-push-test-`, set number to `9999`, set date to `2026-04-30`).
+
+Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
+
+- **Pass criteria:**
+  - Exit code 0
+  - Output contains `Pushed:` and `Pushed == Total` (push writes every file by design — not just edited ones)
+  - `Conflicts: 0`, `Failed: 0`
+  - Page B's `.md` now has a `notion-last-pushed:` frontmatter key
+  - Page B's `notion-last-edited:` was updated to a fresh timestamp
+
+Then use Notion MCP (`notion-fetch` on page B's URL) to verify Notion now reflects each of the 5 edited values.
+
+### Step 9d: Revert page B via push
+Restore page B's `.md` frontmatter to the original values recorded in Step 9b. Run push again:
+
+`./notion-sync.exe push "./test-output/test database obsdiain complex"`
+
+- **Pass criteria:** exit 0, `Pushed == Total`, `Conflicts: 0`.
+
+Use Notion MCP to confirm page B's properties are back to their original values.
+
+### Step 9e: Conflict detection
+Pick a third page (page C, not page A from Step 4 and not page B). Manually edit page C's `.md` to set `notion-last-edited:` to a clearly stale value like `2020-01-01T00:00:00.000Z`. Don't change any other properties.
+
+Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
+
+- **Pass criteria:**
+  - Exit code is **non-zero**
+  - Output contains `Conflicts: 1` and lists page C's filename under `- <filename>`
+  - Notion's actual values for page C are unchanged (verify via MCP — push refuses conflicted files entirely)
+
+After verifying, restore page C's `notion-last-edited:` to its real value (run a `refresh` to repair it cleanly: `./notion-sync.exe refresh "./test-output/test database obsdiain complex" --ids <page-C-id>`).
+
+### Step 9f: Dry-run mode
+Edit page B's `.md` again — change just the `select` value to something like `e2e-dryrun-test`. Run:
+
+`./notion-sync.exe push "./test-output/test database obsdiain complex" --dry-run`
+
+- **Pass criteria:**
+  - Exit code 0
+  - Output starts with `Pushing properties (dry run)...`
+  - Output contains `Dry run:` and `Would push:` (not `Pushed:`)
+  - Notion MCP fetch of page B shows the select value is **unchanged** from Step 9d (i.e., still the original value, not `e2e-dryrun-test`)
+
+Revert page B's local edit by restoring the original select value (no push needed — Notion was never written to).
+
 ### Step 10: Revert Notion changes
 Use Notion MCP tools to restore the page edited in Step 4 back to its original property values and content. This keeps the test database clean for the next run.
+
+(Page B and page C are already back to their original states from Steps 9d and 9e.)
 
 ### Step 11: Clean up
 If `--no-cleanup` was passed, **skip this step** and print `Step 11: Skipped (--no-cleanup)`.
