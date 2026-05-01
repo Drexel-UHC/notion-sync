@@ -142,12 +142,21 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		// is precise. Re-fetch so the local frontmatter holds the precise value
 		// and the next refresh doesn't see the page as stale. See issue #57.
 		newLastEdited := ""
-		if refetched, err := opts.Client.GetPage(notionID); err == nil && refetched != nil {
+		refetched, refetchErr := opts.Client.GetPage(notionID)
+		if refetchErr == nil && refetched != nil {
 			newLastEdited = refetched.LastEditedTime
-		} else if updated != nil && updated.LastEditedTime != "" {
-			newLastEdited = updated.LastEditedTime
-		} else if notionPage != nil {
-			newLastEdited = notionPage.LastEditedTime
+		} else {
+			if refetchErr != nil {
+				// Non-fatal: push succeeded; we just couldn't refetch the precise
+				// timestamp. Surface it so silent failures don't quietly reintroduce
+				// the quantized-timestamp bug this code exists to avoid.
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", filepath.Base(f.path), refetchErr))
+			}
+			if updated != nil && updated.LastEditedTime != "" {
+				newLastEdited = updated.LastEditedTime
+			} else if notionPage != nil {
+				newLastEdited = notionPage.LastEditedTime
+			}
 		}
 
 		pushedAt := time.Now().UTC().Format(time.RFC3339)
