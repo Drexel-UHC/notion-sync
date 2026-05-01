@@ -22,11 +22,24 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		return nil, fmt.Errorf("no %s found in %s. Use 'import' to import the database first", DatabaseMetadataFile, opts.FolderPath)
 	}
 
-	database, err := opts.Client.GetDatabase(metadata.DatabaseID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch database schema: %w", err)
+	// In Notion's multi-data-source API, the property schema lives on the data source,
+	// not the database. Newer _database.json files record the dataSourceId; fall back
+	// to GetDatabase for legacy single-source metadata that predates the migration.
+	var schema map[string]notion.DatabaseProperty
+	if metadata.DataSourceID != "" {
+		ds, err := opts.Client.GetDataSource(metadata.DataSourceID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch data source schema: %w", err)
+		}
+		schema = ds.Properties
+	} else {
+		database, err := opts.Client.GetDatabase(metadata.DatabaseID)
+		if err != nil {
+			return nil, fmt.Errorf("fetch database schema: %w", err)
+		}
+		schema = database.Properties
 	}
-	if len(database.Properties) == 0 {
+	if len(schema) == 0 {
 		return nil, fmt.Errorf("database has no property schema; try re-importing the database first")
 	}
 
@@ -99,7 +112,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			notionPage = page
 		}
 
-		properties, validationErrs := buildPropertyPayload(f.fm, database.Properties)
+		properties, validationErrs := buildPropertyPayload(f.fm, schema)
 		if len(validationErrs) > 0 {
 			result.Failed++
 			for _, e := range validationErrs {

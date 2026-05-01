@@ -660,3 +660,92 @@ func writeDatabaseMeta(t *testing.T, dir, dbID string) {
 		t.Fatal(err)
 	}
 }
+
+// writeDatabaseMetaWithDataSource writes a _database.json that includes a
+// dataSourceId, simulating metadata produced by post-multi-data-source imports.
+func writeDatabaseMetaWithDataSource(t *testing.T, dir, dbID, dsID string) {
+	t.Helper()
+	meta := &FrozenDatabase{DatabaseID: dbID, DataSourceID: dsID, Title: "Test DB"}
+	if err := WriteDatabaseMetadata(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// When _database.json has a dataSourceId, push must fetch the schema from
+// /data_sources/{id} (not /databases/{id}). This is the production path for
+// every Notion DB imported under the multi-data-source API. The mock's
+// `databases` map is intentionally left empty to prove the schema is sourced
+// from `dataSources`.
+func TestPushDatabase_FetchesSchemaFromDataSource(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMetaWithDataSource(t, dir, "db-001", "ds-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: In Progress\n" +
+		"---\n# Content\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.dataSources["ds-001"] = &notion.DataSourceDetail{
+		ID: "ds-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": {Type: "select"},
+		},
+	}
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+	}
+
+	result, err := PushDatabase(PushOptions{
+		Client:     client,
+		FolderPath: dir,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 {
+		t.Errorf("expected 1 pushed, got %d", result.Pushed)
+	}
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected 1 UpdatePage call, got %d", len(client.updateRequests))
+	}
+	if _, ok := client.updateRequests[0].Properties["Status"]; !ok {
+		t.Error("expected Status in payload (proving schema was loaded from data source)")
+	}
+}
+
+// When the data source returns no properties, push must fail with a clear
+// error rather than silently producing an empty payload. This locks in the
+// failure mode that motivated the GetDataSource fix in the first place.
+func TestPushDatabase_DataSourceWithEmptySchemaErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMetaWithDataSource(t, dir, "db-001", "ds-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.dataSources["ds-001"] = &notion.DataSourceDetail{ID: "ds-001"} // no Properties
+
+	_, err := PushDatabase(PushOptions{
+		Client:     client,
+		FolderPath: dir,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error when data source has empty schema, got nil")
+	}
+	if !strings.Contains(err.Error(), "no property schema") {
+		t.Errorf("expected error to mention missing schema, got: %v", err)
+	}
+}
