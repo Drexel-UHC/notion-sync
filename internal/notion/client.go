@@ -395,14 +395,20 @@ func (c *Client) QueryAllEntries(dataSourceID string) ([]Page, error) {
 
 // IsNotFoundError returns true if the error indicates the requested
 // Notion object was not found or not accessible as the expected type.
-// Notion returns 404 for missing objects and 401 "API token is invalid"
-// when querying an ID against the wrong object type (e.g. page ID on /databases/).
+// Notion returns 404 for missing objects, 401 "API token is invalid"
+// when querying an ID against the wrong object type (e.g. page ID on /databases/),
+// and 400 validation_error "is a page, not a database" for the same mismatch
+// on the /databases/ endpoint.
 func IsNotFoundError(err error) bool {
 	var apiErr *ErrorResponse
 	if errors.As(err, &apiErr) {
+		// Notion has no specific error code for the page-on-/databases/ mismatch
+		// as of 2026-05, so we substring-match the message. Revisit if they add
+		// a more specific code.
 		return apiErr.Status == 404 ||
 			apiErr.Code == "object_not_found" ||
-			(apiErr.Status == 401 && strings.Contains(apiErr.Message, "API token is invalid"))
+			(apiErr.Status == 401 && strings.Contains(apiErr.Message, "API token is invalid")) ||
+			(apiErr.Status == 400 && apiErr.Code == "validation_error" && strings.Contains(apiErr.Message, "is a page, not a database"))
 	}
 	return false
 }
