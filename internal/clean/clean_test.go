@@ -439,6 +439,67 @@ body
 	}
 }
 
+func TestFolder_SkipsMetadataBumpWhenVersionUnset(t *testing.T) {
+	// If sync.Version is empty (misconfigured caller), bumping would rewrite
+	// the file without a stamp while still claiming MetadataBumped. Skip both.
+	prev := sync.Version
+	sync.Version = ""
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://notion.so/db-1",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	md := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.MetadataBumped != 0 {
+		t.Errorf("MetadataBumped = %d, want 0 when sync.Version is empty", r.MetadataBumped)
+	}
+
+	got, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != dbJSON {
+		t.Errorf("_database.json was rewritten despite empty sync.Version:\n%s", got)
+	}
+
+	// Dry-run path should also stay silent.
+	r2, err := Folder(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.MetadataBumped != 0 {
+		t.Errorf("dry-run MetadataBumped = %d, want 0 when sync.Version is empty", r2.MetadataBumped)
+	}
+}
+
 func TestFolder_LeavesCleanFolderMetadataUntouched(t *testing.T) {
 	prev := sync.Version
 	sync.Version = "v0.99.0-test"

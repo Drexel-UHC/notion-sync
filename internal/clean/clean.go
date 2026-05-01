@@ -119,6 +119,8 @@ func Folder(root string, dryRun bool) (*Result, error) {
 		}
 
 		r.FilesChanged++
+		// Any cleanup in a folder — including a JSON file gaining a trailing
+		// newline — marks the folder dirty so its metadata gets re-stamped.
 		dirtyDirs[filepath.Dir(path)] = true
 
 		if dryRun {
@@ -152,7 +154,7 @@ func Folder(root string, dryRun bool) (*Result, error) {
 				r.MetadataBumped++
 			}
 		}
-	} else {
+	} else if sync.Version != "" {
 		for dir := range dirtyDirs {
 			if folderHasMetadata(dir) {
 				r.MetadataBumped++
@@ -176,7 +178,15 @@ func folderHasMetadata(dir string) bool {
 // bumpFolderMetadata re-writes _database.json or _page.json in dir (if present)
 // so the syncVersion field is stamped with the current binary's version.
 // Returns true if a metadata file was rewritten.
+//
+// If sync.Version is empty (a misconfigured caller that didn't wire the build
+// version), the bump is skipped entirely — rewriting without a version would
+// produce a file with no stamp while still incrementing MetadataBumped, which
+// is a misleading user-visible counter.
 func bumpFolderMetadata(dir string) (bool, error) {
+	if sync.Version == "" {
+		return false, nil
+	}
 	if dbMeta, err := sync.ReadDatabaseMetadata(dir); err == nil && dbMeta != nil {
 		if err := sync.WriteDatabaseMetadata(dir, dbMeta); err != nil {
 			return false, fmt.Errorf("rewrite %s: %w", sync.DatabaseMetadataFile, err)
