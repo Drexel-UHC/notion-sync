@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
 func TestStripContent_FrontmatterFileProperty(t *testing.T) {
@@ -257,6 +259,353 @@ func TestFolder_JSONURLsNotStripped(t *testing.T) {
 	}
 	if r.FilesChanged != 0 {
 		t.Errorf("file already has trailing newline, should be unchanged, got FilesChanged=%d", r.FilesChanged)
+	}
+}
+
+func TestFolder_StripsFrozenAtLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	original := `---
+notion-id: abc
+notion-url: https://notion.so/abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+notion-last-edited: "2024-01-02T00:00:00Z"
+notion-database-id: db-1
+---
+
+body
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FrozenAtStripped != 1 {
+		t.Errorf("FrozenAtStripped = %d, want 1", r.FrozenAtStripped)
+	}
+	if r.FilesChanged != 1 {
+		t.Errorf("FilesChanged = %d, want 1", r.FilesChanged)
+	}
+
+	got, _ := os.ReadFile(path)
+	if strings.Contains(string(got), "notion-frozen-at") {
+		t.Errorf("file still contains notion-frozen-at:\n%s", got)
+	}
+	for _, keep := range []string{"notion-id: abc", "notion-last-edited:", "notion-database-id: db-1", "body"} {
+		if !strings.Contains(string(got), keep) {
+			t.Errorf("expected %q to remain in file:\n%s", keep, got)
+		}
+	}
+}
+
+func TestFolder_StripsFrozenAtLine_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	original := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FrozenAtStripped != 1 {
+		t.Errorf("dry-run FrozenAtStripped = %d, want 1", r.FrozenAtStripped)
+	}
+
+	got, _ := os.ReadFile(path)
+	if string(got) != original {
+		t.Errorf("dry-run mutated file:\n%s", got)
+	}
+}
+
+func TestFolder_StripsFrozenAtLine_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	cleanContent := `---
+notion-id: abc
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(path, []byte(cleanContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FrozenAtStripped != 0 {
+		t.Errorf("FrozenAtStripped = %d, want 0 (already clean)", r.FrozenAtStripped)
+	}
+
+	got, _ := os.ReadFile(path)
+	if string(got) != cleanContent {
+		t.Errorf("idempotent run mutated content:\n%s", got)
+	}
+}
+
+func TestFolder_StripsFrozenAtLine_OnlyInFrontmatter(t *testing.T) {
+	// A body line that happens to contain "notion-frozen-at:" must NOT be touched.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	original := `---
+notion-id: abc
+---
+
+This page documents the deprecated notion-frozen-at: "2024-01-01" key.
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), `deprecated notion-frozen-at: "2024-01-01"`) {
+		t.Errorf("body line was modified — should only strip from frontmatter:\n%s", got)
+	}
+}
+
+func TestFolder_BumpsSyncVersionInDirtyDatabaseFolder(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://notion.so/db-1",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "_database.json"), []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	md := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.MetadataBumped != 1 {
+		t.Errorf("MetadataBumped = %d, want 1", r.MetadataBumped)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "_database.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"syncVersion": "v0.99.0-test"`) {
+		t.Errorf("syncVersion not bumped:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"databaseId": "db-1"`) {
+		t.Errorf("databaseId field lost:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"entryCount": 1`) {
+		t.Errorf("entryCount field lost:\n%s", got)
+	}
+}
+
+func TestFolder_SkipsMetadataBumpWhenVersionUnset(t *testing.T) {
+	// If sync.Version is empty (misconfigured caller), bumping would rewrite
+	// the file without a stamp while still claiming MetadataBumped. Skip both.
+	prev := sync.Version
+	sync.Version = ""
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://notion.so/db-1",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	md := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.MetadataBumped != 0 {
+		t.Errorf("MetadataBumped = %d, want 0 when sync.Version is empty", r.MetadataBumped)
+	}
+
+	got, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != dbJSON {
+		t.Errorf("_database.json was rewritten despite empty sync.Version:\n%s", got)
+	}
+
+	// Dry-run path should also stay silent.
+	r2, err := Folder(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.MetadataBumped != 0 {
+		t.Errorf("dry-run MetadataBumped = %d, want 0 when sync.Version is empty", r2.MetadataBumped)
+	}
+}
+
+func TestFolder_LeavesCleanFolderMetadataUntouched(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://notion.so/db-1",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// .md file with no notion-frozen-at, no presigned URLs, trailing newline already present.
+	md := `---
+notion-id: abc
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FilesChanged != 0 {
+		t.Errorf("FilesChanged = %d, want 0 (folder was already clean)", r.FilesChanged)
+	}
+	if r.MetadataBumped != 0 {
+		t.Errorf("MetadataBumped = %d, want 0 (no .md changes ⇒ no metadata bump)", r.MetadataBumped)
+	}
+
+	got, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != dbJSON {
+		t.Errorf("_database.json was rewritten despite folder being clean:\n%s", got)
+	}
+}
+
+func TestFolder_BumpsSyncVersionInDirtyStandalonePageFolder(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	root := t.TempDir()
+	pageDir := filepath.Join(root, "pages", "MyPage_abc12345")
+	if err := os.MkdirAll(pageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	pageJSON := `{
+  "pageId": "page-1",
+  "title": "MyPage",
+  "url": "https://notion.so/page-1",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "syncVersion": "v0.5.0"
+}
+`
+	if err := os.WriteFile(filepath.Join(pageDir, "_page.json"), []byte(pageJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	md := `---
+notion-id: page-1
+notion-frozen-at: "2024-01-01T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(pageDir, "MyPage.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.MetadataBumped != 1 {
+		t.Errorf("MetadataBumped = %d, want 1", r.MetadataBumped)
+	}
+
+	got, err := os.ReadFile(filepath.Join(pageDir, "_page.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"syncVersion": "v0.99.0-test"`) {
+		t.Errorf("syncVersion not bumped in _page.json:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"pageId": "page-1"`) {
+		t.Errorf("pageId field lost:\n%s", got)
 	}
 }
 

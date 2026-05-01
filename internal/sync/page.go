@@ -101,7 +101,6 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	fm := map[string]interface{}{
 		"notion-id":          opts.NotionID,
 		"notion-url":         page.URL,
-		"notion-frozen-at":   time.Now().UTC().Format(time.RFC3339),
 		"notion-last-edited": page.LastEditedTime,
 	}
 	if opts.DatabaseID != "" {
@@ -117,7 +116,6 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	keyOrder := []string{
 		"notion-id",
 		"notion-url",
-		"notion-frozen-at",
 		"notion-last-edited",
 		"notion-database-id",
 	}
