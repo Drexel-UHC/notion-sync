@@ -15,7 +15,6 @@ func TestBuildPropertyPayload_SkipsNotionKeys(t *testing.T) {
 	fm := map[string]interface{}{
 		"notion-id":          "abc",
 		"notion-url":         "https://notion.so/abc",
-		"notion-frozen-at":   "2024-01-01T00:00:00Z",
 		"notion-last-edited": "2024-01-01T00:00:00Z",
 		"notion-database-id": "db1",
 		"notion-deleted":     false,
@@ -278,7 +277,6 @@ func TestPushDatabase_PushesProperties(t *testing.T) {
 	md := "---\n" +
 		"notion-id: page-001\n" +
 		"notion-url: https://notion.so/page-001\n" +
-		"notion-frozen-at: 2024-01-01T00:00:00Z\n" +
 		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
 		"notion-database-id: db-001\n" +
 		"Status: In Progress\n" +

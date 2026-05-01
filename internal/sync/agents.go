@@ -54,7 +54,6 @@ Every ` + "`.md`" + ` file starts with YAML frontmatter. The first block is alwa
 ---
 notion-id: "<page-uuid>"
 notion-url: "https://www.notion.so/..."
-notion-frozen-at: "<RFC 3339 — when this file was last written>"
 notion-last-edited: "<RFC 3339 — Notion's last_edited_time>"
 notion-database-id: "<database-uuid>"   # only present for database entries
 # notion-deleted: true                  # only present if the entry was removed in Notion (soft delete)
@@ -150,7 +149,7 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 - Default ` + "`refresh`" + ` is incremental: entries whose ` + "`notion-last-edited`" + ` matches the local copy are skipped.
 - ` + "`refresh --force`" + ` resyncs every entry regardless of timestamp.
 - ` + "`refresh --ids id1,id2`" + ` resyncs specific pages by ID.
-- ` + "`clean <folder>`" + ` strips presigned URLs from existing files **without** any API call — used as a one-time backfill after upgrading.
+- ` + "`clean <folder>`" + ` performs in-place cleanups **without** any API call — strips presigned URLs, removes the deprecated ` + "`notion-frozen-at`" + ` frontmatter line, and ensures trailing newlines on ` + "`.md`" + `/` + "`.json`" + ` files. Any folder it modifies has its ` + "`_database.json`" + ` or ` + "`_page.json`" + ` re-stamped with the current ` + "`syncVersion`" + ` so the workspace records which binary last touched it. Used as a one-time backfill after upgrading.
 
 ## Push semantics (writing local changes back to Notion)
 

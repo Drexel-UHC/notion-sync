@@ -1,13 +1,21 @@
-// Package clean strips AWS S3 pre-signed query strings from already-imported
-// Markdown files, without making any Notion API calls.
+// Package clean performs in-place cleanups on an already-imported notion-sync
+// workspace, without making any Notion API calls. It exists to absorb one-time
+// migrations after upgrading the binary so routine refreshes produce focused
+// diffs.
 //
-// Notion file URLs (PDFs, images, attachments) carry a query string
-// (X-Amz-Signature, X-Amz-Date, X-Amz-Credential, etc.) that rotates every
-// hour. The path is stable. Routine refreshes therefore produce a giant diff
-// of pure URL noise. This package walks already-imported .md files and
-// strips those query strings in-place, producing a one-time focused commit
-// after which routine refreshes (with the default-on stripping in the sync
-// path) stay clean.
+// Cleanups applied:
+//   - Strips Notion's S3 pre-signed query strings (X-Amz-Signature, etc.) from
+//     file URLs in .md content. The query string rotates hourly while the path
+//     is stable, so leaving them in produced large noise diffs on every refresh.
+//   - Removes the deprecated `notion-frozen-at` line from YAML frontmatter. The
+//     field used to be written on every freeze, which churned every entry's
+//     diff even when content was byte-identical.
+//   - Ensures .md and .json files end with a trailing newline.
+//
+// For each folder it modifies, the corresponding _database.json or _page.json
+// is re-written so the syncVersion field reflects the binary that performed
+// the cleanup — giving the workspace an audit trail of which notion-sync
+// version last touched it.
 package clean
 
 import (
@@ -17,6 +25,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
 // presignedURLPattern matches Notion's S3 pre-signed URLs. Anchored on the
@@ -33,21 +43,28 @@ var presignedURLPattern = regexp.MustCompile(
 
 // Result summarizes a clean run.
 type Result struct {
-	FilesScanned  int
-	FilesChanged  int
-	URLsStripped  int
-	NewlinesFixed int
-	DryRun        bool
+	FilesScanned     int
+	FilesChanged     int
+	URLsStripped     int
+	NewlinesFixed    int
+	FrozenAtStripped int
+	MetadataBumped   int
+	DryRun           bool
 }
 
 // Folder walks `root` recursively and applies cleanups to eligible files:
 //   - strips pre-signed S3 query strings from `.md` files
+//   - removes `notion-frozen-at:` lines from `.md` frontmatter
 //   - appends a trailing newline to `.md` and `.json` files that are missing one
+//
+// After the walk, any folder whose files were modified has its `_database.json`
+// or `_page.json` re-stamped with the current binary's syncVersion.
 //
 // When dryRun is true, files are not modified; the result reports what would
 // have changed.
 func Folder(root string, dryRun bool) (*Result, error) {
 	r := &Result{DryRun: dryRun}
+	dirtyDirs := make(map[string]bool)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -82,6 +99,13 @@ func Folder(root string, dryRun bool) (*Result, error) {
 				r.URLsStripped += count
 				changed = true
 			}
+
+			defrozen, fcount := stripFrozenAt(out)
+			if fcount > 0 {
+				out = defrozen
+				r.FrozenAtStripped += fcount
+				changed = true
+			}
 		}
 
 		if len(out) > 0 && out[len(out)-1] != '\n' {
@@ -95,6 +119,7 @@ func Folder(root string, dryRun bool) (*Result, error) {
 		}
 
 		r.FilesChanged++
+		dirtyDirs[filepath.Dir(path)] = true
 
 		if dryRun {
 			return nil
@@ -112,7 +137,118 @@ func Folder(root string, dryRun bool) (*Result, error) {
 	if err != nil {
 		return r, err
 	}
+
+	// For each folder we touched, re-write its _database.json or _page.json so
+	// the syncVersion field reflects the binary that performed the cleanup. This
+	// gives users a record of which notion-sync version last mutated the
+	// workspace. Skipped in dry-run.
+	if !dryRun {
+		for dir := range dirtyDirs {
+			bumped, err := bumpFolderMetadata(dir)
+			if err != nil {
+				return r, err
+			}
+			if bumped {
+				r.MetadataBumped++
+			}
+		}
+	} else {
+		for dir := range dirtyDirs {
+			if folderHasMetadata(dir) {
+				r.MetadataBumped++
+			}
+		}
+	}
+
 	return r, nil
+}
+
+// folderHasMetadata reports whether a folder contains _database.json or _page.json.
+func folderHasMetadata(dir string) bool {
+	for _, name := range []string{sync.DatabaseMetadataFile, sync.PageMetadataFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// bumpFolderMetadata re-writes _database.json or _page.json in dir (if present)
+// so the syncVersion field is stamped with the current binary's version.
+// Returns true if a metadata file was rewritten.
+func bumpFolderMetadata(dir string) (bool, error) {
+	if dbMeta, err := sync.ReadDatabaseMetadata(dir); err == nil && dbMeta != nil {
+		if err := sync.WriteDatabaseMetadata(dir, dbMeta); err != nil {
+			return false, fmt.Errorf("rewrite %s: %w", sync.DatabaseMetadataFile, err)
+		}
+		return true, nil
+	}
+	if pageMeta, err := sync.ReadPageMetadata(dir); err == nil && pageMeta != nil {
+		if err := sync.WritePageMetadata(dir, pageMeta); err != nil {
+			return false, fmt.Errorf("rewrite %s: %w", sync.PageMetadataFile, err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// frozenAtKeyPattern matches a `notion-frozen-at:` line (with optional surrounding
+// whitespace) inside YAML frontmatter. The key is anchored at line start so it
+// won't match the substring inside another property's value.
+var frozenAtKeyPattern = regexp.MustCompile(`(?m)^[ \t]*notion-frozen-at[ \t]*:.*\r?\n?`)
+
+// stripFrozenAt removes any `notion-frozen-at:` line from the YAML frontmatter
+// of a Markdown file. Body content is not touched. Returns the modified content
+// and the number of lines stripped.
+//
+// The frontmatter is the region between the first `---` line at the start of
+// the file and the next `---` line.
+func stripFrozenAt(s string) (string, int) {
+	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
+		return s, 0
+	}
+	openLen := 4
+	if strings.HasPrefix(s, "---\r\n") {
+		openLen = 5
+	}
+
+	rest := s[openLen:]
+	closeIdx := indexOfFrontmatterClose(rest)
+	if closeIdx < 0 {
+		return s, 0
+	}
+
+	fmRegion := rest[:closeIdx]
+	stripped := frozenAtKeyPattern.ReplaceAllString(fmRegion, "")
+	count := strings.Count(fmRegion, "\n") - strings.Count(stripped, "\n")
+	if count <= 0 {
+		return s, 0
+	}
+	return s[:openLen] + stripped + rest[closeIdx:], count
+}
+
+// indexOfFrontmatterClose returns the byte offset (relative to rest) of the
+// closing `---` line of YAML frontmatter, or -1 if not found.
+func indexOfFrontmatterClose(rest string) int {
+	for i := 0; i < len(rest); {
+		// Find next newline.
+		nl := strings.Index(rest[i:], "\n")
+		var line string
+		if nl < 0 {
+			line = rest[i:]
+		} else {
+			line = rest[i : i+nl]
+		}
+		trimmed := strings.TrimRight(line, "\r")
+		if trimmed == "---" {
+			return i
+		}
+		if nl < 0 {
+			return -1
+		}
+		i += nl + 1
+	}
+	return -1
 }
 
 // stripContent returns the input with all S3 pre-signed query strings removed,

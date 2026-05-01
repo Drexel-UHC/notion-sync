@@ -165,7 +165,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 // buildPropertyPayload constructs the Notion API property update payload from frontmatter.
 // Uses the database schema to determine property types; skips read-only / Notion-native properties.
 var pushNotionKeys = map[string]bool{
-	"notion-id": true, "notion-url": true, "notion-frozen-at": true,
+	"notion-id": true, "notion-url": true,
 	"notion-last-edited": true, "notion-database-id": true,
 	"notion-deleted": true, "notion-last-pushed": true,
 }

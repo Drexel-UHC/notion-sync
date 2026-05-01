@@ -588,11 +588,15 @@ func runClean(args []string) error {
 	}
 
 	label := "Modified"
+	bumpLabel := "Stamped"
 	if *dryRun {
 		label = "Would modify"
+		bumpLabel = "Would stamp"
 	}
 	fmt.Printf("Scanned: %d files\n", r.FilesScanned)
-	fmt.Printf("%s: %d files (%d URLs stripped, %d trailing newlines added)\n", label, r.FilesChanged, r.URLsStripped, r.NewlinesFixed)
+	fmt.Printf("%s: %d files (%d URLs stripped, %d trailing newlines added, %d notion-frozen-at lines stripped)\n",
+		label, r.FilesChanged, r.URLsStripped, r.NewlinesFixed, r.FrozenAtStripped)
+	fmt.Printf("%s syncVersion in: %d folder(s)\n", bumpLabel, r.MetadataBumped)
 	return nil
 }
 

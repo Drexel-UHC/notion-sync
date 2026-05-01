@@ -3,6 +3,7 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ran-codes/notion-sync/internal/notion"
@@ -451,6 +452,36 @@ func TestMapPropertiesToFrontmatter_UnknownTypeSkipped(t *testing.T) {
 
 	if len(fm) != 0 {
 		t.Errorf("expected empty frontmatter for unknown types, got %v", fm)
+	}
+}
+
+func TestFreezePage_DoesNotEmitFrozenAt(t *testing.T) {
+	// notion-frozen-at was removed because it added per-file diff churn on every
+	// refresh without driving any logic. The database-level lastSyncedAt in
+	// _database.json is the authoritative "when was this synced" record.
+	dir := t.TempDir()
+	page := testPage("page-id-frozen", "Frozen Test", "2025-01-01T00:00:00Z")
+	client := newMockClient()
+	client.pages["page-id-frozen"] = &page
+	client.blocks["page-id-frozen"] = []notion.Block{}
+
+	_, err := FreezePage(FreezePageOptions{
+		Client:       client,
+		NotionID:     "page-id-frozen",
+		OutputFolder: dir,
+		DatabaseID:   "db-1",
+		Page:         &page,
+	})
+	if err != nil {
+		t.Fatalf("FreezePage: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "page-id-frozen.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "notion-frozen-at") {
+		t.Errorf("freshly-written file should not contain notion-frozen-at:\n%s", data)
 	}
 }
 
