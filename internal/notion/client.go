@@ -402,6 +402,9 @@ func (c *Client) QueryAllEntries(dataSourceID string) ([]Page, error) {
 func IsNotFoundError(err error) bool {
 	var apiErr *ErrorResponse
 	if errors.As(err, &apiErr) {
+		// Notion has no specific error code for the page-on-/databases/ mismatch
+		// as of 2026-05, so we substring-match the message. Revisit if they add
+		// a more specific code.
 		return apiErr.Status == 404 ||
 			apiErr.Code == "object_not_found" ||
 			(apiErr.Status == 401 && strings.Contains(apiErr.Message, "API token is invalid")) ||
