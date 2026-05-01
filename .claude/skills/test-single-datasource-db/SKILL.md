@@ -44,12 +44,13 @@ Run: `go build ./cmd/notion-sync`
 Run: `./notion-sync.exe import 2fe57008-e885-8003-b1f3-cc05981dc6b0 --output ./test-output`
 - **Pass criteria:** created > 0, exit code 0.
 
-### Step 2b: Verify duplicate title disambiguation
-Check that pages with duplicate titles ("Headings & Rich Text") were disambiguated:
-- `Headings & Rich Text.md` should NOT exist (clean name must not exist since the title is duplicated)
-- 2 files matching `Headings & Rich Text-*.md` should exist
-- Grep both files for `notion-id` — they should have different IDs
-- Both should have `notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0`
+### Step 2b: Verify duplicate title handling
+Since PR #43, all synced files are named by UUID (e.g., `<notion-id>.md`), not by title — this trivially handles duplicates without a separate disambiguation pattern. Verify:
+- Every `.md` filename matches the UUID format `<8>-<4>-<4>-<4>-<12>.md` (no title-based names like `Headings & Rich Text.md`)
+- Each file's `notion-id` frontmatter matches its filename (minus the `.md`)
+- Exactly 2 files contain `Name: Headings & Rich Text` (the duplicate-title test pages from `setup.md` Page 1 + Page 6)
+- Both duplicate-title files have distinct `notion-id` values
+- All files have `notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0`
 - **Pass criteria:** All checks pass.
 
 ### Step 3: No-op refresh
@@ -100,7 +101,7 @@ Pick a page **other than the one edited in Step 4** (call it page B). Read its l
 | `number` | `Score` | |
 | `date` | `Due Date` | |
 
-These keys are fixed by the test DB schema (see `.claude/reference/test-databases/single-data-source/setup.md`). If a chosen page B has a null value for any of these (e.g., page 4 has null `Due Date`), pick a different page or note the gap in the summary.
+These keys are fixed by the test DB schema (see `.claude/reference/test-databases/single-data-source/setup.md`). Pages 2, 3, or 5 work — all 5 properties populated, unique titles. Avoid page 1 (duplicate-title disambiguation), page 4 (null `Due Date`/`Website`/`Contact Email`), and the page edited in Step 4. If the chosen page has a null value for any required key, pick another or note the gap in the summary.
 
 ### Step 9c: Edit page B locally and push
 Edit page B's `.md` file: change the 5 property values in the frontmatter to clearly distinguishable test values:
@@ -144,6 +145,8 @@ Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
 ### Step 9e2: Force-override the conflict
 Page C still has its stale `notion-last-edited:` from the previous step. Re-run push with `--force` to confirm the override path bypasses the conflict check:
 
+> **Expected behavior (continued):** like Step 9e, force push writes every non-empty file. The point is to verify the override path on page C; the other 11 writes are no-ops on data values but still bump Notion timestamps. The resulting `Pushed:` count will be `Total`, not `1`.
+
 `./notion-sync.exe push "./test-output/test database obsdiain complex" --force`
 
 - **Pass criteria:**
@@ -156,11 +159,13 @@ Page C still has its stale `notion-last-edited:` from the previous step. Re-run 
 Verify via Notion MCP that page C's properties match the local frontmatter (since page C wasn't otherwise edited, this should be a no-op for property values, but the timestamp should be current).
 
 ### Step 9e3: Repair page C state
-After the force push, page C's local frontmatter should already match Notion. Run a refresh to confirm everything is consistent:
+After the force push, page C's local frontmatter should already match Notion (in property values). Run a refresh to confirm:
 
 `./notion-sync.exe refresh "./test-output/test database obsdiain complex" --ids <page-C-id>`
 
-- **Pass criteria:** updated = 0 or 1 (depends on whether the force-push timestamp drifted), exit 0.
+- **Pass criteria:** exit 0, `updated = 1` (expected — see note below).
+
+> **Why `updated = 1` instead of 0:** Notion's `UpdatePage` response returns `last_edited_time` quantized to whole minutes (e.g., `22:43:00.000Z`), but `QueryDataSource` (used by refresh) returns the precise timestamp (`22:43:25.xxxZ`). After every push, local frontmatter has the rounded value; refresh sees the drift and rewrites the file. This is a known binary quirk independent of this PR.
 
 ### Step 9f: Dry-run mode
 Edit page B's `.md` again — change just the `select` value to something like `e2e-dryrun-test`. Run:

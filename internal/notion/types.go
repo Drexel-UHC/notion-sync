@@ -29,9 +29,10 @@ type DataSource struct {
 
 // DataSourceDetail represents the full data source response from GET /data_sources/{id}.
 type DataSourceDetail struct {
-	ID    string     `json:"id"`
-	Type  string     `json:"type"`
-	Title []RichText `json:"title,omitempty"`
+	ID         string                      `json:"id"`
+	Type       string                      `json:"type"`
+	Title      []RichText                  `json:"title,omitempty"`
+	Properties map[string]DatabaseProperty `json:"properties,omitempty"`
 }
 
 // Page represents a Notion page response.
