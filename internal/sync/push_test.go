@@ -618,6 +618,64 @@ func TestPushDatabase_WritesLastPushed(t *testing.T) {
 	}
 }
 
+// Notion's UpdatePage response echoes last_edited_time quantized to whole
+// minutes, while the value Notion stores (and that QueryDataSource / GetPage
+// return) is precise. If push wrote the quantized value to local frontmatter,
+// the next refresh would see local != remote and re-fetch the page block tree
+// for nothing. Push must therefore reconcile by re-fetching the precise
+// timestamp via GetPage after UpdatePage and writing that to the file.
+func TestPushDatabase_WritesPreciseLastEditedAfterUpdate(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2026-04-30T22:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"---\n"
+	filePath := filepath.Join(dir, "page-001.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// Pre-update GetPage (conflict check) returns the local timestamp.
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2026-04-30T22:00:00Z",
+	}
+	// UpdatePage echoes a minute-quantized timestamp (Notion's API behavior).
+	client.updatePageReturns["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2026-04-30T22:43:00.000Z",
+	}
+	// After UpdatePage, Notion's stored state has the precise timestamp,
+	// which is what subsequent GetPage / QueryDataSource calls would see.
+	preciseTime := "2026-04-30T22:43:25.123Z"
+	client.postUpdatePages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: preciseTime,
+	}
+
+	if _, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(filePath)
+	s := string(got)
+	if !strings.Contains(s, "notion-last-edited: "+preciseTime) {
+		t.Errorf("expected frontmatter to contain precise timestamp %q (from post-update GetPage), got:\n%s", preciseTime, s)
+	}
+	if strings.Contains(s, "notion-last-edited: 2026-04-30T22:43:00.000Z") {
+		t.Error("frontmatter still has the quantized timestamp from UpdatePage's response")
+	}
+}
+
 func TestUpdateAfterPush_DoesNotCorruptValueContainingKey(t *testing.T) {
 	dir := t.TempDir()
 	// A property value contains the substring "notion-last-edited:" — the function

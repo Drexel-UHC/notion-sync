@@ -137,10 +137,14 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			continue
 		}
 
-		// Use the returned last_edited_time if available, otherwise fall back to the
-		// value we already fetched during conflict check.
+		// UpdatePage's response echoes last_edited_time quantized to whole
+		// minutes, but Notion's stored value (returned by GetPage / QueryDataSource)
+		// is precise. Re-fetch so the local frontmatter holds the precise value
+		// and the next refresh doesn't see the page as stale. See issue #57.
 		newLastEdited := ""
-		if updated != nil && updated.LastEditedTime != "" {
+		if refetched, err := opts.Client.GetPage(notionID); err == nil && refetched != nil {
+			newLastEdited = refetched.LastEditedTime
+		} else if updated != nil && updated.LastEditedTime != "" {
 			newLastEdited = updated.LastEditedTime
 		} else if notionPage != nil {
 			newLastEdited = notionPage.LastEditedTime
