@@ -14,6 +14,15 @@ type mockNotionClient struct {
 	pages          map[string]*notion.Page
 	blocks         map[string][]notion.Block // keyed by blockID
 	updateRequests []updateRequest           // recorded UpdatePage calls
+	// updatePageReturns, when set for a page ID, is what UpdatePage returns
+	// for that ID instead of pages[id]. Simulates Notion's real behavior
+	// where UpdatePage echoes a minute-quantized last_edited_time while the
+	// stored value (returned by GetPage / QueryDataSource) is precise.
+	updatePageReturns map[string]*notion.Page
+	// postUpdatePages, when set for a page ID, replaces pages[id] after a
+	// successful UpdatePage call. Simulates Notion's stored state advancing
+	// to a precise post-edit timestamp that subsequent GetPage calls see.
+	postUpdatePages map[string]*notion.Page
 }
 
 type updateRequest struct {
@@ -23,11 +32,13 @@ type updateRequest struct {
 
 func newMockClient() *mockNotionClient {
 	return &mockNotionClient{
-		databases:   make(map[string]*notion.Database),
-		dataSources: make(map[string]*notion.DataSourceDetail),
-		entries:     make(map[string][]notion.Page),
-		pages:       make(map[string]*notion.Page),
-		blocks:      make(map[string][]notion.Block),
+		databases:         make(map[string]*notion.Database),
+		dataSources:       make(map[string]*notion.DataSourceDetail),
+		entries:           make(map[string][]notion.Page),
+		pages:             make(map[string]*notion.Page),
+		blocks:            make(map[string][]notion.Block),
+		updatePageReturns: make(map[string]*notion.Page),
+		postUpdatePages:   make(map[string]*notion.Page),
 	}
 }
 
@@ -65,11 +76,24 @@ func (m *mockNotionClient) GetPage(pageID string) (*notion.Page, error) {
 
 func (m *mockNotionClient) UpdatePage(pageID string, properties map[string]interface{}) (*notion.Page, error) {
 	m.updateRequests = append(m.updateRequests, updateRequest{PageID: pageID, Properties: properties})
-	page, ok := m.pages[pageID]
-	if !ok {
-		return nil, fmt.Errorf("page %s not found", pageID)
+
+	var response *notion.Page
+	if override, ok := m.updatePageReturns[pageID]; ok {
+		response = override
+	} else {
+		page, ok := m.pages[pageID]
+		if !ok {
+			return nil, fmt.Errorf("page %s not found", pageID)
+		}
+		response = page
 	}
-	return page, nil
+
+	// Simulate Notion's stored state advancing after a successful update.
+	if post, ok := m.postUpdatePages[pageID]; ok {
+		m.pages[pageID] = post
+	}
+
+	return response, nil
 }
 
 func (m *mockNotionClient) FetchAllBlocks(blockID string) ([]notion.Block, error) {

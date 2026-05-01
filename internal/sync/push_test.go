@@ -618,6 +618,123 @@ func TestPushDatabase_WritesLastPushed(t *testing.T) {
 	}
 }
 
+// Notion's UpdatePage response echoes last_edited_time quantized to whole
+// minutes, while the value Notion stores (and that QueryDataSource / GetPage
+// return) is precise. If push wrote the quantized value to local frontmatter,
+// the next refresh would see local != remote and re-fetch the page block tree
+// for nothing. Push must therefore reconcile by re-fetching the precise
+// timestamp via GetPage after UpdatePage and writing that to the file.
+func TestPushDatabase_WritesPreciseLastEditedAfterUpdate(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2026-04-30T22:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"---\n"
+	filePath := filepath.Join(dir, "page-001.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// Pre-update GetPage (conflict check) returns the local timestamp.
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2026-04-30T22:00:00Z",
+	}
+	// UpdatePage echoes a minute-quantized timestamp (Notion's API behavior).
+	client.updatePageReturns["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2026-04-30T22:43:00.000Z",
+	}
+	// After UpdatePage, Notion's stored state has the precise timestamp,
+	// which is what subsequent GetPage / QueryDataSource calls would see.
+	preciseTime := "2026-04-30T22:43:25.123Z"
+	client.postUpdatePages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: preciseTime,
+	}
+
+	if _, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(filePath)
+	s := string(got)
+	if !strings.Contains(s, "notion-last-edited: "+preciseTime) {
+		t.Errorf("expected frontmatter to contain precise timestamp %q (from post-update GetPage), got:\n%s", preciseTime, s)
+	}
+	if strings.Contains(s, "notion-last-edited: 2026-04-30T22:43:00.000Z") {
+		t.Error("frontmatter still has the quantized timestamp from UpdatePage's response")
+	}
+}
+
+// When the post-update GetPage refetch fails (rate limit, network blip, etc.),
+// push must still succeed (UpdatePage already committed) but the failure must
+// be surfaced as a non-fatal warning in result.Errors. Silent fallback to the
+// quantized timestamp would defeat the precise-timestamp fix without any signal
+// to the caller — they'd silently get the bug back.
+func TestPushDatabase_RefetchFailure_RecordsNonFatalWarning(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2026-04-30T22:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"---\n"
+	filePath := filepath.Join(dir, "page-001.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// UpdatePage succeeds and returns the quantized timestamp.
+	client.updatePageReturns["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2026-04-30T22:43:00.000Z",
+	}
+	// pages["page-001"] is intentionally NOT set so the post-update GetPage
+	// refetch returns "page not found". Force=true skips the pre-update
+	// conflict-check GetPage, so the only GetPage call in this run is the
+	// post-update refetch — guaranteed to fail.
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, Force: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Pushed != 1 {
+		t.Errorf("expected Pushed=1 (push should succeed despite refetch failure), got %d", result.Pushed)
+	}
+	if result.Failed != 0 {
+		t.Errorf("expected Failed=0 (refetch failure is non-fatal), got %d", result.Failed)
+	}
+
+	var foundRefetchErr bool
+	for _, e := range result.Errors {
+		if strings.Contains(e, "page-001.md") && strings.Contains(strings.ToLower(e), "refetch") {
+			foundRefetchErr = true
+			break
+		}
+	}
+	if !foundRefetchErr {
+		t.Errorf("expected result.Errors to contain a refetch warning for page-001.md, got: %v", result.Errors)
+	}
+}
+
 func TestUpdateAfterPush_DoesNotCorruptValueContainingKey(t *testing.T) {
 	dir := t.TempDir()
 	// A property value contains the substring "notion-last-edited:" — the function
