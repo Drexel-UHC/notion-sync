@@ -1,7 +1,7 @@
 ---
 name: test-single-datasource-db
 description: Run integration test against the single-data-source test database (import, refresh, --ids, --force, push)
-version: 2.1.0
+version: 2.2.0
 args: "[--verbose] [--no-cleanup]"
 ---
 
@@ -83,8 +83,9 @@ Grep the synced `.md` files in `./test-output/test database obsdiain complex/` f
 | `unique_id` | Present in at least one file, value matches pattern `PREFIX-N` or just `N` (digits) |
 | `created_by` | Present in at least one file, value is a non-empty string (user name or ID) |
 | `last_edited_by` | Present in at least one file, value is a non-empty string (user name or ID) |
+| `notion-frozen-at` | **Absent from every file** (regression guard — ref #54: the field was removed because it churned every entry's diff on every refresh) |
 
-- **Pass criteria:** All 3 keys found with valid non-null values.
+- **Pass criteria:** First 3 keys found with valid non-null values; `notion-frozen-at` produces zero matches across all `.md` files.
 
 ### Step 9: Verify file mtime preservation
 For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
