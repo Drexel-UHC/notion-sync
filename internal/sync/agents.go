@@ -145,7 +145,7 @@ Pages removed from Notion are **not** deleted from disk on refresh. Instead, ` +
   "databaseId": "<uuid>",
   "dataSourceId": "<uuid>",
   "title": "Human Title",
-  "url": "https://www.notion.so/...",
+  "url": "https://app.notion.com/p/<database-id-32-hex>",
   "folderPath": "<absolute path>",
   "lastSyncedAt": "<RFC 3339>",
   "entryCount": 42,
@@ -161,7 +161,7 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 {
   "pageId": "<uuid>",
   "title": "Page Title",
-  "url": "https://www.notion.so/...",
+  "url": "https://app.notion.com/p/<page-id-32-hex>",
   "folderPath": "<absolute path>",
   "lastSyncedAt": "<RFC 3339>",
   "syncVersion": "v0.5.0"
@@ -173,7 +173,13 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 - Default ` + "`refresh`" + ` is incremental: entries whose ` + "`notion-last-edited`" + ` matches the local copy are skipped.
 - ` + "`refresh --force`" + ` resyncs every entry regardless of timestamp.
 - ` + "`refresh --ids id1,id2`" + ` resyncs specific pages by ID.
-- ` + "`clean <folder>`" + ` performs in-place cleanups **without** any API call — strips presigned URLs, removes the deprecated ` + "`notion-frozen-at`" + ` frontmatter line, and ensures trailing newlines on ` + "`.md`" + `/` + "`.json`" + ` files. Any folder it modifies has its ` + "`_database.json`" + ` or ` + "`_page.json`" + ` re-stamped with the current ` + "`syncVersion`" + ` so the workspace records which binary last touched it. Also regenerates ` + "`AGENTS.md`" + ` (this file) when its version stamp is older than the running binary. Used as a one-time backfill after upgrading.
+- ` + "`clean <folder>`" + ` performs in-place cleanups **without** any API call. Used as a one-time backfill after upgrading. Cleanups applied:
+  - strips Notion S3 presigned query strings from file URLs in ` + "`.md`" + ` content
+  - removes the deprecated ` + "`notion-frozen-at`" + ` frontmatter line
+  - canonicalizes legacy ` + "`www.notion.so/Title-{id}`" + ` URLs to ` + "`app.notion.com/p/{id}`" + ` in ` + "`.md`" + ` frontmatter and metadata JSON
+  - ensures trailing newlines on ` + "`.md`" + `/` + "`.json`" + ` files
+  - re-stamps ` + "`_database.json`" + ` / ` + "`_page.json`" + ` with the current ` + "`syncVersion`" + ` for any folder it modified
+  - regenerates ` + "`AGENTS.md`" + ` (this file) when its version stamp is older than the running binary
 - ` + "`agents-md <folder>`" + ` regenerates ` + "`AGENTS.md`" + ` from the running binary, **always overwriting** any existing copy. Use this when you want the latest doc unconditionally; ` + "`clean`" + ` is the safer default that only rewrites on stamp drift.
 
 ## Push semantics (writing local changes back to Notion)
