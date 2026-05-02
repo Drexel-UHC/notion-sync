@@ -84,8 +84,11 @@ Grep the synced `.md` files in `./test-output/test database obsdiain complex/` f
 | `created_by` | Present in at least one file, value is a non-empty string (user name or ID) |
 | `last_edited_by` | Present in at least one file, value is a non-empty string (user name or ID) |
 | `notion-frozen-at` | **Absent from every file** (regression guard — ref #54: the field was removed because it churned every entry's diff on every refresh) |
+| `notion-url` | **Present in every file**, and the line matches `^notion-url:[ \t]*"?https://app\.notion\.com/p/[a-f0-9]{32}"?[ \t]*$` (regression guard — ref #63: legacy `www.notion.so/...` URLs must not leak through; the anchored pattern also catches a future writer that appends a query/fragment or drops the field entirely) |
 
-- **Pass criteria:** First 3 keys found with valid non-null values; `notion-frozen-at` produces zero matches across all `.md` files.
+Also check `_database.json` in the synced folder: its `"url"` line must match `"url":[ \t]*"https://app\.notion\.com/p/[a-f0-9]{32}"` (same regression guard, applied to the metadata writer's chokepoint).
+
+- **Pass criteria:** First 3 keys found with valid non-null values; `notion-frozen-at` produces zero matches across all `.md` files; every `.md` file has a `notion-url` line matching the anchored canonical pattern, and `_database.json`'s `"url"` matches the anchored canonical pattern.
 
 ### Step 9: Verify file mtime preservation
 For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.

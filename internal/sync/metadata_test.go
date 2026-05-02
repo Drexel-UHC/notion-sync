@@ -118,6 +118,47 @@ func TestWriteDatabaseMetadata_TrailingNewline(t *testing.T) {
 	}
 }
 
+func TestWriteDatabaseMetadata_CanonicalizesURL(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenDatabase{
+		DatabaseID: "abc",
+		Title:      "T",
+		URL:        "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+		EntryCount: 1,
+	}
+	if err := WriteDatabaseMetadata(dir, meta); err != nil {
+		t.Fatalf("WriteDatabaseMetadata: %v", err)
+	}
+	got, err := ReadDatabaseMetadata(dir)
+	if err != nil {
+		t.Fatalf("ReadDatabaseMetadata: %v", err)
+	}
+	want := "https://app.notion.com/p/1234567890abcdef1234567890abcdef"
+	if got.URL != want {
+		t.Errorf("URL = %q, want %q", got.URL, want)
+	}
+}
+
+func TestWritePageMetadata_CanonicalizesURL(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenPage{
+		PageID: "abc",
+		Title:  "T",
+		URL:    "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+	}
+	if err := WritePageMetadata(dir, meta); err != nil {
+		t.Fatalf("WritePageMetadata: %v", err)
+	}
+	got, err := ReadPageMetadata(dir)
+	if err != nil {
+		t.Fatalf("ReadPageMetadata: %v", err)
+	}
+	want := "https://app.notion.com/p/1234567890abcdef1234567890abcdef"
+	if got.URL != want {
+		t.Errorf("URL = %q, want %q", got.URL, want)
+	}
+}
+
 func TestWritePageMetadata_TrailingNewline(t *testing.T) {
 	dir := t.TempDir()
 	meta := &FrozenPage{PageID: "abc", Title: "T"}

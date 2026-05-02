@@ -64,3 +64,80 @@ func TestStripPresignedParams(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalizeNotionURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "legacy notion.so with title slug",
+			in:   "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "already canonical — idempotent",
+			in:   "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "bare notion.so without title slug",
+			in:   "https://notion.so/1234567890abcdef1234567890abcdef",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "uuid-with-dashes in path — collapses to no-dashes",
+			in:   "https://www.notion.so/Title-12345678-90ab-cdef-1234-567890abcdef",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "non-Notion URL passes through unchanged",
+			in:   "https://example.com/some/path",
+			want: "https://example.com/some/path",
+		},
+		{
+			name: "non-Notion URL with embedded 32-hex passes through (host gate)",
+			in:   "https://example.com/file/1234567890abcdef1234567890abcdef.png",
+			want: "https://example.com/file/1234567890abcdef1234567890abcdef.png",
+		},
+		{
+			name: "github 40-hex commit SHA — not truncated to 32",
+			in:   "https://github.com/repo/commit/abcdef0123456789abcdef0123456789abcdef01",
+			want: "https://github.com/repo/commit/abcdef0123456789abcdef0123456789abcdef01",
+		},
+		{
+			name: "notion view URL with ?v= — uses page ID, not view ID",
+			in:   "https://www.notion.so/Title-1234567890abcdef1234567890abcdef?v=fedcba0987654321fedcba0987654321",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "notion URL with #blockId fragment — uses page ID, not block ID",
+			in:   "https://www.notion.so/Title-1234567890abcdef1234567890abcdef#fedcba0987654321fedcba0987654321",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "look-alike host evil-notion.so passes through",
+			in:   "https://evil-notion.so/Title-1234567890abcdef1234567890abcdef",
+			want: "https://evil-notion.so/Title-1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "empty string",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "notion URL without an extractable hex ID",
+			in:   "https://www.notion.so/Some-Workspace/SettingsPage",
+			want: "https://www.notion.so/Some-Workspace/SettingsPage",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CanonicalizeNotionURL(tt.in); got != tt.want {
+				t.Errorf("CanonicalizeNotionURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

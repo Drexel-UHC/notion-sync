@@ -10,6 +10,10 @@
 //   - Removes the deprecated `notion-frozen-at` line from YAML frontmatter. The
 //     field used to be written on every freeze, which churned every entry's
 //     diff even when content was byte-identical.
+//   - Canonicalizes `notion-url:` values in .md frontmatter and `"url"` fields
+//     in metadata JSON to the `app.notion.com/p/{id}` form, so legacy
+//     `www.notion.so/Title-{id}` URLs from earlier syncs stop drifting against
+//     newly emitted ones.
 //   - Ensures .md and .json files end with a trailing newline.
 //
 // For each folder it modifies, the corresponding _database.json or _page.json
@@ -26,6 +30,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ran-codes/notion-sync/internal/notion"
 	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
@@ -43,18 +48,21 @@ var presignedURLPattern = regexp.MustCompile(
 
 // Result summarizes a clean run.
 type Result struct {
-	FilesScanned     int
-	FilesChanged     int
-	URLsStripped     int
-	NewlinesFixed    int
-	FrozenAtStripped int
-	MetadataBumped   int
-	DryRun           bool
+	FilesScanned      int
+	FilesChanged      int
+	URLsStripped      int
+	NewlinesFixed     int
+	FrozenAtStripped  int
+	URLsCanonicalized int
+	MetadataBumped    int
+	DryRun            bool
 }
 
 // Folder walks `root` recursively and applies cleanups to eligible files:
 //   - strips pre-signed S3 query strings from `.md` files
 //   - removes `notion-frozen-at:` lines from `.md` frontmatter
+//   - canonicalizes `notion-url:` values in `.md` frontmatter and `"url"`
+//     fields in `_database.json` / `_page.json`
 //   - appends a trailing newline to `.md` and `.json` files that are missing one
 //
 // After the walk, any folder whose files were modified has its `_database.json`
@@ -65,6 +73,12 @@ type Result struct {
 func Folder(root string, dryRun bool) (*Result, error) {
 	r := &Result{DryRun: dryRun}
 	dirtyDirs := make(map[string]bool)
+	// Per-folder count of non-canonical "url" values found in metadata JSON.
+	// Counted at walk time but only added to URLsCanonicalized once the
+	// corresponding bumpFolderMetadata succeeds (or, in dry-run, would
+	// succeed) — otherwise the user-visible counter would lie when
+	// sync.Version is unset or the metadata file fails to round-trip.
+	jsonURLCounts := make(map[string]int)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -106,12 +120,35 @@ func Folder(root string, dryRun bool) (*Result, error) {
 				r.FrozenAtStripped += fcount
 				changed = true
 			}
+
+			canonical, ucount := canonicalizeFrontmatterURL(out)
+			if ucount > 0 {
+				out = canonical
+				r.URLsCanonicalized += ucount
+				changed = true
+			}
 		}
 
 		if len(out) > 0 && out[len(out)-1] != '\n' {
 			out += "\n"
 			r.NewlinesFixed++
 			changed = true
+		}
+
+		// For metadata JSON, record non-canonical Notion URLs and mark the
+		// folder dirty. The actual rewrite happens in bumpFolderMetadata, which
+		// goes through WriteDatabaseMetadata / WritePageMetadata — both
+		// canonicalize URLs as part of the write. The count is held in
+		// jsonURLCounts and only folded into r.URLsCanonicalized after the
+		// rewrite is confirmed (or in dry-run, would be confirmed) — otherwise
+		// a missing sync.Version or an unparseable metadata file would leave
+		// the URL on disk while inflating the user-visible counter.
+		if isJSON && isMetadataFileName(d.Name()) {
+			ucount := countNonCanonicalNotionURLInJSON(out)
+			if ucount > 0 {
+				jsonURLCounts[filepath.Dir(path)] += ucount
+				dirtyDirs[filepath.Dir(path)] = true
+			}
 		}
 
 		if !changed {
@@ -152,12 +189,14 @@ func Folder(root string, dryRun bool) (*Result, error) {
 			}
 			if bumped {
 				r.MetadataBumped++
+				r.URLsCanonicalized += jsonURLCounts[dir]
 			}
 		}
 	} else if sync.Version != "" {
 		for dir := range dirtyDirs {
 			if folderHasMetadata(dir) {
 				r.MetadataBumped++
+				r.URLsCanonicalized += jsonURLCounts[dir]
 			}
 		}
 	}
@@ -187,15 +226,29 @@ func bumpFolderMetadata(dir string) (bool, error) {
 	if sync.Version == "" {
 		return false, nil
 	}
-	if dbMeta, err := sync.ReadDatabaseMetadata(dir); err == nil && dbMeta != nil {
+	// Read errors here mean the metadata file exists but is unreadable —
+	// permission denied, partial truncation, malformed JSON. ReadDatabaseMetadata
+	// and ReadPageMetadata return (nil, nil) for missing files, so a non-nil
+	// error always means real corruption that the user needs to see. Surface it
+	// instead of silently falling through, otherwise a broken _database.json
+	// would survive every clean run with no signal to the user.
+	dbMeta, err := sync.ReadDatabaseMetadata(dir)
+	if err != nil {
+		return false, fmt.Errorf("read %s in %s: %w", sync.DatabaseMetadataFile, dir, err)
+	}
+	if dbMeta != nil {
 		if err := sync.WriteDatabaseMetadata(dir, dbMeta); err != nil {
-			return false, fmt.Errorf("rewrite %s: %w", sync.DatabaseMetadataFile, err)
+			return false, fmt.Errorf("rewrite %s in %s: %w", sync.DatabaseMetadataFile, dir, err)
 		}
 		return true, nil
 	}
-	if pageMeta, err := sync.ReadPageMetadata(dir); err == nil && pageMeta != nil {
+	pageMeta, err := sync.ReadPageMetadata(dir)
+	if err != nil {
+		return false, fmt.Errorf("read %s in %s: %w", sync.PageMetadataFile, dir, err)
+	}
+	if pageMeta != nil {
 		if err := sync.WritePageMetadata(dir, pageMeta); err != nil {
-			return false, fmt.Errorf("rewrite %s: %w", sync.PageMetadataFile, err)
+			return false, fmt.Errorf("rewrite %s in %s: %w", sync.PageMetadataFile, dir, err)
 		}
 		return true, nil
 	}
@@ -206,6 +259,42 @@ func bumpFolderMetadata(dir string) (bool, error) {
 // whitespace) inside YAML frontmatter. The key is anchored at line start so it
 // won't match the substring inside another property's value.
 var frozenAtKeyPattern = regexp.MustCompile(`(?m)^[ \t]*notion-frozen-at[ \t]*:.*\r?\n?`)
+
+// notionURLLinePattern matches a `notion-url:` line in YAML frontmatter and
+// captures the URL value. The value may be quoted ("...") or bare; we keep
+// it tight by stopping at the line end.
+var notionURLLinePattern = regexp.MustCompile(`(?m)^([ \t]*notion-url[ \t]*:[ \t]*"?)([^"\r\n]*)("?[ \t]*\r?)$`)
+
+// jsonURLValuePattern matches a JSON `"url": "..."` field and captures the value.
+// Used to detect non-canonical Notion URLs in _database.json / _page.json.
+var jsonURLValuePattern = regexp.MustCompile(`"url"\s*:\s*"([^"]*)"`)
+
+// isMetadataFileName reports whether the given basename is one of the
+// notion-sync metadata files (case-insensitive on the file's lowercase form).
+func isMetadataFileName(name string) bool {
+	return name == sync.DatabaseMetadataFile || name == sync.PageMetadataFile
+}
+
+// countNonCanonicalNotionURLInJSON returns the number of `"url": "..."` fields
+// in the JSON content whose value is a Notion URL not in canonical form.
+// Used by the clean walk to decide whether a metadata folder is "dirty" because
+// its URL needs canonicalization.
+func countNonCanonicalNotionURLInJSON(s string) int {
+	count := 0
+	for _, m := range jsonURLValuePattern.FindAllStringSubmatch(s, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		val := m[1]
+		if val == "" {
+			continue
+		}
+		if notion.CanonicalizeNotionURL(val) != val {
+			count++
+		}
+	}
+	return count
+}
 
 // stripFrozenAt removes any `notion-frozen-at:` line from the YAML frontmatter
 // of a Markdown file. Body content is not touched. Returns the modified content
@@ -259,6 +348,46 @@ func indexOfFrontmatterClose(rest string) int {
 		i += nl + 1
 	}
 	return -1
+}
+
+// canonicalizeFrontmatterURL rewrites the value of `notion-url:` inside YAML
+// frontmatter to the canonical app.notion.com/p/{id} form. Body content is not
+// touched. Returns the modified content and the number of URLs that were
+// changed (0 if the URL was already canonical or had no extractable Notion ID).
+func canonicalizeFrontmatterURL(s string) (string, int) {
+	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
+		return s, 0
+	}
+	openLen := 4
+	if strings.HasPrefix(s, "---\r\n") {
+		openLen = 5
+	}
+
+	rest := s[openLen:]
+	closeIdx := indexOfFrontmatterClose(rest)
+	if closeIdx < 0 {
+		return s, 0
+	}
+
+	count := 0
+	fmRegion := rest[:closeIdx]
+	rewritten := notionURLLinePattern.ReplaceAllStringFunc(fmRegion, func(match string) string {
+		groups := notionURLLinePattern.FindStringSubmatch(match)
+		if len(groups) != 4 {
+			return match
+		}
+		prefix, value, suffix := groups[1], groups[2], groups[3]
+		canonical := notion.CanonicalizeNotionURL(value)
+		if canonical == value {
+			return match
+		}
+		count++
+		return prefix + canonical + suffix
+	})
+	if count == 0 {
+		return s, 0
+	}
+	return s[:openLen] + rewritten + rest[closeIdx:], count
 }
 
 // stripContent returns the input with all S3 pre-signed query strings removed,

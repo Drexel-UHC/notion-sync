@@ -383,6 +383,307 @@ This page documents the deprecated notion-frozen-at: "2024-01-01" key.
 	}
 }
 
+func TestFolder_CanonicalizesNotionURLInFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	original := `---
+notion-id: 1234567890abcdef1234567890abcdef
+notion-url: "https://www.notion.so/Title-1234567890abcdef1234567890abcdef"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 1 {
+		t.Errorf("URLsCanonicalized = %d, want 1", r.URLsCanonicalized)
+	}
+	if r.FilesChanged != 1 {
+		t.Errorf("FilesChanged = %d, want 1", r.FilesChanged)
+	}
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "https://app.notion.com/p/1234567890abcdef1234567890abcdef") {
+		t.Errorf("file missing canonical URL:\n%s", got)
+	}
+	if strings.Contains(string(got), "https://www.notion.so/") {
+		t.Errorf("file still contains legacy notion.so URL:\n%s", got)
+	}
+}
+
+func TestFolder_CanonicalizesURLInDatabaseJSON(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 1 {
+		t.Errorf("URLsCanonicalized = %d, want 1", r.URLsCanonicalized)
+	}
+
+	got, _ := os.ReadFile(dbPath)
+	if !strings.Contains(string(got), `"url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef"`) {
+		t.Errorf("_database.json missing canonical url:\n%s", got)
+	}
+	if strings.Contains(string(got), "https://www.notion.so/") {
+		t.Errorf("_database.json still contains legacy notion.so URL:\n%s", got)
+	}
+}
+
+func TestFolder_BumpsMetadata_OnURLOnlyCanonicalization(t *testing.T) {
+	// Folder where the ONLY thing wrong is a non-canonical URL in _database.json.
+	// No .md changes, no presigned URLs, no frozen-at lines. The clean step
+	// must still mark the folder dirty and bump syncVersion + canonicalize URL
+	// in _database.json — otherwise legacy URLs in metadata files would silently
+	// survive every clean run.
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanMd := `---
+notion-id: 1234567890abcdef1234567890abcdef
+notion-url: "https://app.notion.com/p/1234567890abcdef1234567890abcdef"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "entry.md"), []byte(cleanMd), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 1 {
+		t.Errorf("URLsCanonicalized = %d, want 1", r.URLsCanonicalized)
+	}
+	if r.MetadataBumped != 1 {
+		t.Errorf("MetadataBumped = %d, want 1 (URL-only change must trigger bump)", r.MetadataBumped)
+	}
+
+	got, _ := os.ReadFile(dbPath)
+	if !strings.Contains(string(got), `"url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef"`) {
+		t.Errorf("_database.json url not canonicalized:\n%s", got)
+	}
+	if !strings.Contains(string(got), `"syncVersion": "v0.99.0-test"`) {
+		t.Errorf("syncVersion not bumped:\n%s", got)
+	}
+}
+
+func TestFolder_CanonicalizeURL_DryRun(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "entry.md")
+	mdOriginal := `---
+notion-id: 1234567890abcdef1234567890abcdef
+notion-url: "https://www.notion.so/Title-1234567890abcdef1234567890abcdef"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(mdPath, []byte(mdOriginal), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "_database.json")
+	dbOriginal := `{
+  "databaseId": "db-1",
+  "url": "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+  "syncVersion": "v0.5.0"
+}
+`
+	if err := os.WriteFile(dbPath, []byte(dbOriginal), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 2 {
+		t.Errorf("dry-run URLsCanonicalized = %d, want 2 (1 .md + 1 .json)", r.URLsCanonicalized)
+	}
+
+	gotMd, _ := os.ReadFile(mdPath)
+	if string(gotMd) != mdOriginal {
+		t.Errorf("dry-run mutated .md:\n%s", gotMd)
+	}
+	gotDb, _ := os.ReadFile(dbPath)
+	if string(gotDb) != dbOriginal {
+		t.Errorf("dry-run mutated _database.json:\n%s", gotDb)
+	}
+}
+
+func TestFolder_CanonicalizeURL_OnlyInFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "entry.md")
+	original := `---
+notion-id: 1234567890abcdef1234567890abcdef
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+This page documents the legacy notion-url: "https://www.notion.so/Title-1234567890abcdef1234567890abcdef" key from before normalization.
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 0 {
+		t.Errorf("URLsCanonicalized = %d, want 0 (body should not be touched)", r.URLsCanonicalized)
+	}
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), `legacy notion-url: "https://www.notion.so/Title-1234567890abcdef1234567890abcdef" key`) {
+		t.Errorf("body line was modified — should only canonicalize in frontmatter:\n%s", got)
+	}
+}
+
+func TestFolder_CanonicalizeURL_Idempotent(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	mdPath := filepath.Join(dir, "entry.md")
+	mdContent := `---
+notion-id: 1234567890abcdef1234567890abcdef
+notion-url: "https://app.notion.com/p/1234567890abcdef1234567890abcdef"
+notion-last-edited: "2024-01-02T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(mdPath, []byte(mdContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "_database.json")
+	dbContent := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.99.0-test"
+}
+`
+	if err := os.WriteFile(dbPath, []byte(dbContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 0 {
+		t.Errorf("URLsCanonicalized = %d, want 0 (already canonical)", r.URLsCanonicalized)
+	}
+	if r.FilesChanged != 0 {
+		t.Errorf("FilesChanged = %d, want 0", r.FilesChanged)
+	}
+	if r.MetadataBumped != 0 {
+		t.Errorf("MetadataBumped = %d, want 0 (no changes ⇒ no bump)", r.MetadataBumped)
+	}
+
+	gotMd, _ := os.ReadFile(mdPath)
+	if string(gotMd) != mdContent {
+		t.Errorf(".md was mutated:\n%s", gotMd)
+	}
+	gotDb, _ := os.ReadFile(dbPath)
+	if string(gotDb) != dbContent {
+		t.Errorf("_database.json was mutated:\n%s", gotDb)
+	}
+}
+
+func TestFolder_CanonicalizesURLInPageJSON(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	root := t.TempDir()
+	pageDir := filepath.Join(root, "pages", "MyPage_abc12345")
+	if err := os.MkdirAll(pageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	pageJSON := `{
+  "pageId": "page-1",
+  "title": "MyPage",
+  "url": "https://www.notion.so/Title-1234567890abcdef1234567890abcdef",
+  "folderPath": "/tmp",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "syncVersion": "v0.5.0"
+}
+`
+	pagePath := filepath.Join(pageDir, "_page.json")
+	if err := os.WriteFile(pagePath, []byte(pageJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.URLsCanonicalized != 1 {
+		t.Errorf("URLsCanonicalized = %d, want 1", r.URLsCanonicalized)
+	}
+
+	got, _ := os.ReadFile(pagePath)
+	if !strings.Contains(string(got), `"url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef"`) {
+		t.Errorf("_page.json missing canonical url:\n%s", got)
+	}
+}
+
 func TestFolder_BumpsSyncVersionInDirtyDatabaseFolder(t *testing.T) {
 	prev := sync.Version
 	sync.Version = "v0.99.0-test"
@@ -606,6 +907,44 @@ body
 	}
 	if !strings.Contains(string(got), `"pageId": "page-1"`) {
 		t.Errorf("pageId field lost:\n%s", got)
+	}
+}
+
+func TestFolder_SurfacesCorruptMetadataReadError(t *testing.T) {
+	// A corrupt _database.json (exists but malformed) used to be silently
+	// swallowed by bumpFolderMetadata, leaving the user with no signal that
+	// their workspace is broken. The clean walk must now surface the read
+	// error instead of returning success.
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "_database.json"), []byte("{ this is not valid json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A .md file with notion-frozen-at so the folder gets marked dirty and
+	// bumpFolderMetadata is reached.
+	md := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Folder(dir, false)
+	if err == nil {
+		t.Fatal("expected error from corrupt _database.json, got nil")
+	}
+	if !strings.Contains(err.Error(), "_database.json") {
+		t.Errorf("error should name the broken file, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error should include the folder path, got: %v", err)
 	}
 }
 
