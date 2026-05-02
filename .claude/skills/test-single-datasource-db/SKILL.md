@@ -53,6 +53,15 @@ Since PR #43, all synced files are named by UUID (e.g., `<notion-id>.md`), not b
 - All files have `notion-database-id: 2fe57008-e885-8003-b1f3-cc05981dc6b0`
 - **Pass criteria:** All checks pass.
 
+### Step 2c: Verify AGENTS.md is emitted with a version stamp
+The `import` command must drop a stamped `AGENTS.md` at the workspace root so downstream agents can interpret the synced files (regression guard — ref #62: AGENTS.md emission used to lack a version stamp, which prevented `clean` from detecting drift).
+
+Check `./test-output/AGENTS.md`:
+- File exists
+- Contains a line matching `^<!-- notion-sync-version: \S+ -->` near the top of the file
+
+- **Pass criteria:** File exists and the stamp line is present.
+
 ### Step 3: No-op refresh
 Run: `./notion-sync.exe refresh "./test-output/test database obsdiain complex"`
 - **Pass criteria:** updated = 0, skipped = total, deleted = 0.

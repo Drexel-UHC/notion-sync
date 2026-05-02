@@ -53,6 +53,15 @@ Check that the import created the correct structure:
 - The `.md` file contains expected content (at least a heading and a code block)
 - **Pass criteria:** All checks pass.
 
+### Step 3b: Verify AGENTS.md is emitted with a version stamp
+The `import` command must drop a stamped `AGENTS.md` at the workspace root so downstream agents can interpret the synced files (regression guard — ref #62: AGENTS.md emission used to lack a version stamp, which prevented `clean` from detecting drift).
+
+Check `./test-output/AGENTS.md`:
+- File exists
+- Contains a line matching `^<!-- notion-sync-version: \S+ -->` near the top of the file
+
+- **Pass criteria:** File exists and the stamp line is present.
+
 ### Step 4: No-op refresh
 Run: `./notion-sync.exe refresh "test-output/pages/Test - Notion sync - single page_31357008"`
 - **Pass criteria:** Output shows `Status: skipped`.
