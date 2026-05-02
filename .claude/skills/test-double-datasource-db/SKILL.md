@@ -69,6 +69,15 @@ Checks:
 
 - **Pass criteria:** All 6 checks pass.
 
+### Step 3b: Verify AGENTS.md is emitted with a version stamp
+The `import` command must drop a stamped `AGENTS.md` at the workspace root so downstream agents can interpret the synced files (regression guard — ref #62: AGENTS.md emission used to lack a version stamp, which prevented `clean` from detecting drift).
+
+Check `./test-output/AGENTS.md`:
+- File exists
+- Contains a line matching `^<!-- notion-sync-version: \S+ -->` near the top of the file
+
+- **Pass criteria:** File exists and the stamp line is present.
+
 ### Step 4: Verify Projects markdown files
 Check the `.md` files in `Projects/` subfolder:
 

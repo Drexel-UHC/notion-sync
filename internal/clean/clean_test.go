@@ -948,6 +948,64 @@ body
 	}
 }
 
+func TestFolder_RegeneratesStaleAgentsMD(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v9.9.9-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	stale := "<!-- notion-sync-version: v0.0.1 -->\n# stale agents doc\n"
+	dest := filepath.Join(dir, "AGENTS.md")
+	if err := os.WriteFile(dest, []byte(stale), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.AgentsMDWritten != 1 {
+		t.Errorf("AgentsMDWritten = %d, want 1", r.AgentsMDWritten)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "<!-- notion-sync-version: v9.9.9-test -->") {
+		t.Errorf("AGENTS.md not regenerated:\n%s", got)
+	}
+}
+
+func TestFolder_LeavesCurrentAgentsMDAlone(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v9.9.9-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	current := "<!-- notion-sync-version: v9.9.9-test -->\n# current agents doc, possibly user-edited\n"
+	dest := filepath.Join(dir, "AGENTS.md")
+	if err := os.WriteFile(dest, []byte(current), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.AgentsMDWritten != 0 {
+		t.Errorf("AgentsMDWritten = %d, want 0 (stamp matches)", r.AgentsMDWritten)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != current {
+		t.Errorf("AGENTS.md was overwritten despite matching stamp")
+	}
+}
+
 func TestFolder_RecursesIntoSubfolders(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")

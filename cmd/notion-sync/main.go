@@ -63,6 +63,7 @@ Usage:
   notion-sync push <folder> [--force] [--dry-run] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync clean <folder> [--dry-run]
+  notion-sync agents-md <folder>
   notion-sync config set <key> <value>
 
 Commands:
@@ -81,7 +82,11 @@ Commands:
   list      List all synced databases and pages in a folder
   clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
             Useful one-time backfill after upgrading. No API calls.
+            Also regenerates AGENTS.md if its version stamp is older than this binary.
             --dry-run  Show what would change without writing
+  agents-md Regenerate AGENTS.md in a workspace from the running binary.
+            Always overwrites any existing AGENTS.md (the command name is the consent).
+            No API calls.
   config    Manage configuration (apiKey, defaultOutputFolder)
 
 Examples:
@@ -139,6 +144,8 @@ func main() {
 		err = runList(args)
 	case "clean":
 		err = runClean(args)
+	case "agents-md":
+		err = runAgentsMD(args)
 	case "config":
 		err = runConfig(args)
 	default:
@@ -597,10 +604,40 @@ func runClean(args []string) error {
 	fmt.Printf("%s: %d files (%d URLs stripped, %d trailing newlines added, %d notion-frozen-at lines stripped)\n",
 		label, r.FilesChanged, r.URLsStripped, r.NewlinesFixed, r.FrozenAtStripped)
 	fmt.Printf("%s syncVersion in: %d folder(s)\n", bumpLabel, r.MetadataBumped)
+	if r.AgentsMDWritten > 0 {
+		agentsLabel := "Regenerated"
+		if *dryRun {
+			agentsLabel = "Would regenerate"
+		}
+		fmt.Printf("%s AGENTS.md\n", agentsLabel)
+	}
 	return nil
 }
 
-//// 2.7 Config ----
+//// 2.7 AgentsMD ----
+
+func runAgentsMD(args []string) error {
+	fs := flag.NewFlagSet("agents-md", flag.ExitOnError)
+
+	if err := fs.Parse(reorderArgs(args)); err != nil {
+		return err
+	}
+
+	if fs.NArg() == 0 {
+		return fmt.Errorf("missing folder path\n" +
+			"Usage: notion-sync agents-md <folder>\n" +
+			"Example: notion-sync agents-md ./notion")
+	}
+
+	folder := fs.Arg(0)
+	if err := sync.RegenerateAgentsMD(folder); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote AGENTS.md in %s (notion-sync %s)\n", folder, version)
+	return nil
+}
+
+//// 2.8 Config ----
 
 func runConfig(args []string) error {
 	if len(args) == 0 {

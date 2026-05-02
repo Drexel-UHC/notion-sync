@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +85,34 @@ func TestCLI_UnknownCommand_ExitOne(t *testing.T) {
 	err := cmd.Run()
 	if err == nil {
 		t.Error("expected non-zero exit for unknown command")
+	}
+}
+
+func TestCLI_AgentsMD_OverwritesExisting(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "AGENTS.md")
+	if err := os.WriteFile(dest, []byte("# old\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := exec.Command("go", "run", ".", "agents-md", tmp).CombinedOutput()
+	if err != nil {
+		t.Fatalf("agents-md failed: %v\n%s", err, out)
+	}
+
+	if !strings.Contains(string(out), "Wrote AGENTS.md") {
+		t.Errorf("expected confirmation message in stdout, got:\n%s", out)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(got), "<!-- notion-sync-version:") {
+		t.Errorf("AGENTS.md missing version stamp:\n%s", got)
+	}
+	if strings.Contains(string(got), "# old") {
+		t.Errorf("AGENTS.md was not overwritten:\n%s", got)
 	}
 }
 
