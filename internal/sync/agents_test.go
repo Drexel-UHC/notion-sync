@@ -70,7 +70,7 @@ func TestEnsureAgentsMDCurrent_LeavesAloneIfCurrent(t *testing.T) {
 	}
 }
 
-func TestEnsureAgentsMDCurrent_DryRun(t *testing.T) {
+func TestEnsureAgentsMDCurrent_DryRunMissing(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "AGENTS.md")
 
@@ -87,6 +87,58 @@ func TestEnsureAgentsMDCurrent_DryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		t.Errorf("dry-run wrote a file (or stat err = %v)", err)
+	}
+}
+
+func TestEnsureAgentsMDCurrent_DryRunStale(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "AGENTS.md")
+
+	prev := Version
+	Version = "v4.0.0"
+	defer func() { Version = prev }()
+
+	stale := "<!-- notion-sync-version: v1.0.0 -->\n# stale content\n"
+	if err := os.WriteFile(dest, []byte(stale), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	written, err := EnsureAgentsMDCurrent(tmp, true)
+	if err != nil {
+		t.Fatalf("EnsureAgentsMDCurrent: %v", err)
+	}
+	if !written {
+		t.Errorf("written = false, want true (dry-run with stale stamp should report)")
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != stale {
+		t.Errorf("dry-run modified file on disk:\nwant: %q\ngot:  %q", stale, got)
+	}
+}
+
+func TestEnsureAgentsMDCurrent_DryRunCurrent(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "AGENTS.md")
+
+	prev := Version
+	Version = "v4.0.0"
+	defer func() { Version = prev }()
+
+	current := "<!-- notion-sync-version: v4.0.0 -->\n# current content\n"
+	if err := os.WriteFile(dest, []byte(current), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	written, err := EnsureAgentsMDCurrent(tmp, true)
+	if err != nil {
+		t.Fatalf("EnsureAgentsMDCurrent: %v", err)
+	}
+	if written {
+		t.Errorf("written = true, want false (dry-run with current stamp must not report a write)")
 	}
 }
 

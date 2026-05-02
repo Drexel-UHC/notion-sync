@@ -609,7 +609,7 @@ func runClean(args []string) error {
 		if *dryRun {
 			agentsLabel = "Would regenerate"
 		}
-		fmt.Printf("%s AGENTS.md (stamp out of date)\n", agentsLabel)
+		fmt.Printf("%s AGENTS.md\n", agentsLabel)
 	}
 	return nil
 }

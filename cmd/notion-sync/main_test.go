@@ -100,6 +100,10 @@ func TestCLI_AgentsMD_OverwritesExisting(t *testing.T) {
 		t.Fatalf("agents-md failed: %v\n%s", err, out)
 	}
 
+	if !strings.Contains(string(out), "Wrote AGENTS.md") {
+		t.Errorf("expected confirmation message in stdout, got:\n%s", out)
+	}
+
 	got, err := os.ReadFile(dest)
 	if err != nil {
 		t.Fatalf("read: %v", err)
