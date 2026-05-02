@@ -910,6 +910,44 @@ body
 	}
 }
 
+func TestFolder_SurfacesCorruptMetadataReadError(t *testing.T) {
+	// A corrupt _database.json (exists but malformed) used to be silently
+	// swallowed by bumpFolderMetadata, leaving the user with no signal that
+	// their workspace is broken. The clean walk must now surface the read
+	// error instead of returning success.
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "_database.json"), []byte("{ this is not valid json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A .md file with notion-frozen-at so the folder gets marked dirty and
+	// bumpFolderMetadata is reached.
+	md := `---
+notion-id: abc
+notion-frozen-at: "2024-01-01T00:00:00Z"
+---
+
+body
+`
+	if err := os.WriteFile(filepath.Join(dir, "abc.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Folder(dir, false)
+	if err == nil {
+		t.Fatal("expected error from corrupt _database.json, got nil")
+	}
+	if !strings.Contains(err.Error(), "_database.json") {
+		t.Errorf("error should name the broken file, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error should include the folder path, got: %v", err)
+	}
+}
+
 func TestFolder_RecursesIntoSubfolders(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")

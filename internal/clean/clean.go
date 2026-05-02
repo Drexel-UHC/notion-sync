@@ -226,15 +226,29 @@ func bumpFolderMetadata(dir string) (bool, error) {
 	if sync.Version == "" {
 		return false, nil
 	}
-	if dbMeta, err := sync.ReadDatabaseMetadata(dir); err == nil && dbMeta != nil {
+	// Read errors here mean the metadata file exists but is unreadable —
+	// permission denied, partial truncation, malformed JSON. ReadDatabaseMetadata
+	// and ReadPageMetadata return (nil, nil) for missing files, so a non-nil
+	// error always means real corruption that the user needs to see. Surface it
+	// instead of silently falling through, otherwise a broken _database.json
+	// would survive every clean run with no signal to the user.
+	dbMeta, err := sync.ReadDatabaseMetadata(dir)
+	if err != nil {
+		return false, fmt.Errorf("read %s in %s: %w", sync.DatabaseMetadataFile, dir, err)
+	}
+	if dbMeta != nil {
 		if err := sync.WriteDatabaseMetadata(dir, dbMeta); err != nil {
-			return false, fmt.Errorf("rewrite %s: %w", sync.DatabaseMetadataFile, err)
+			return false, fmt.Errorf("rewrite %s in %s: %w", sync.DatabaseMetadataFile, dir, err)
 		}
 		return true, nil
 	}
-	if pageMeta, err := sync.ReadPageMetadata(dir); err == nil && pageMeta != nil {
+	pageMeta, err := sync.ReadPageMetadata(dir)
+	if err != nil {
+		return false, fmt.Errorf("read %s in %s: %w", sync.PageMetadataFile, dir, err)
+	}
+	if pageMeta != nil {
 		if err := sync.WritePageMetadata(dir, pageMeta); err != nil {
-			return false, fmt.Errorf("rewrite %s: %w", sync.PageMetadataFile, err)
+			return false, fmt.Errorf("rewrite %s in %s: %w", sync.PageMetadataFile, dir, err)
 		}
 		return true, nil
 	}
