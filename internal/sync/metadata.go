@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
 const DatabaseMetadataFile = "_database.json"
@@ -37,6 +39,7 @@ func WriteDatabaseMetadata(folderPath string, metadata *FrozenDatabase) error {
 	if Version != "" {
 		metadata.SyncVersion = Version
 	}
+	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
@@ -74,6 +77,7 @@ func WritePageMetadata(folderPath string, metadata *FrozenPage) error {
 	if Version != "" {
 		metadata.SyncVersion = Version
 	}
+	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {

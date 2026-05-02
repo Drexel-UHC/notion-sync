@@ -53,7 +53,7 @@ Every ` + "`.md`" + ` file starts with YAML frontmatter. The first block is alwa
 ` + "```" + `yaml
 ---
 notion-id: "<page-uuid>"
-notion-url: "https://www.notion.so/..."
+notion-url: "https://app.notion.com/p/<page-id-32-hex>"
 notion-last-edited: "<RFC 3339 — Notion's last_edited_time>"
 notion-database-id: "<database-uuid>"   # only present for database entries
 # notion-deleted: true                  # only present if the entry was removed in Notion (soft delete)

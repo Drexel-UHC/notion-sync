@@ -100,7 +100,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	// Build frontmatter
 	fm := map[string]interface{}{
 		"notion-id":          opts.NotionID,
-		"notion-url":         page.URL,
+		"notion-url":         notion.CanonicalizeNotionURL(page.URL),
 		"notion-last-edited": page.LastEditedTime,
 	}
 	if opts.DatabaseID != "" {

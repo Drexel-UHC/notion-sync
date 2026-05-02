@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ran-codes/notion-sync/internal/notion"
 	"github.com/ran-codes/notion-sync/internal/sync"
 )
 
@@ -43,13 +44,14 @@ var presignedURLPattern = regexp.MustCompile(
 
 // Result summarizes a clean run.
 type Result struct {
-	FilesScanned     int
-	FilesChanged     int
-	URLsStripped     int
-	NewlinesFixed    int
-	FrozenAtStripped int
-	MetadataBumped   int
-	DryRun           bool
+	FilesScanned      int
+	FilesChanged      int
+	URLsStripped      int
+	NewlinesFixed     int
+	FrozenAtStripped  int
+	URLsCanonicalized int
+	MetadataBumped    int
+	DryRun            bool
 }
 
 // Folder walks `root` recursively and applies cleanups to eligible files:
@@ -106,12 +108,32 @@ func Folder(root string, dryRun bool) (*Result, error) {
 				r.FrozenAtStripped += fcount
 				changed = true
 			}
+
+			canonical, ucount := canonicalizeFrontmatterURL(out)
+			if ucount > 0 {
+				out = canonical
+				r.URLsCanonicalized += ucount
+				changed = true
+			}
 		}
 
 		if len(out) > 0 && out[len(out)-1] != '\n' {
 			out += "\n"
 			r.NewlinesFixed++
 			changed = true
+		}
+
+		// For metadata JSON, detect non-canonical Notion URLs and mark the
+		// folder dirty. The actual rewrite happens in bumpFolderMetadata, which
+		// goes through WriteDatabaseMetadata / WritePageMetadata — both
+		// canonicalize URLs as part of the write. Counting here gives users an
+		// accurate URLsCanonicalized total without duplicating rewrite logic.
+		if isJSON && isMetadataFileName(d.Name()) {
+			ucount := countNonCanonicalNotionURLInJSON(out)
+			if ucount > 0 {
+				r.URLsCanonicalized += ucount
+				dirtyDirs[filepath.Dir(path)] = true
+			}
 		}
 
 		if !changed {
@@ -207,6 +229,42 @@ func bumpFolderMetadata(dir string) (bool, error) {
 // won't match the substring inside another property's value.
 var frozenAtKeyPattern = regexp.MustCompile(`(?m)^[ \t]*notion-frozen-at[ \t]*:.*\r?\n?`)
 
+// notionURLLinePattern matches a `notion-url:` line in YAML frontmatter and
+// captures the URL value. The value may be quoted ("...") or bare; we keep
+// it tight by stopping at the line end.
+var notionURLLinePattern = regexp.MustCompile(`(?m)^([ \t]*notion-url[ \t]*:[ \t]*"?)([^"\r\n]*)("?[ \t]*\r?)$`)
+
+// jsonURLValuePattern matches a JSON `"url": "..."` field and captures the value.
+// Used to detect non-canonical Notion URLs in _database.json / _page.json.
+var jsonURLValuePattern = regexp.MustCompile(`"url"\s*:\s*"([^"]*)"`)
+
+// isMetadataFileName reports whether the given basename is one of the
+// notion-sync metadata files (case-insensitive on the file's lowercase form).
+func isMetadataFileName(name string) bool {
+	return name == sync.DatabaseMetadataFile || name == sync.PageMetadataFile
+}
+
+// countNonCanonicalNotionURLInJSON returns the number of `"url": "..."` fields
+// in the JSON content whose value is a Notion URL not in canonical form.
+// Used by the clean walk to decide whether a metadata folder is "dirty" because
+// its URL needs canonicalization.
+func countNonCanonicalNotionURLInJSON(s string) int {
+	count := 0
+	for _, m := range jsonURLValuePattern.FindAllStringSubmatch(s, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		val := m[1]
+		if val == "" {
+			continue
+		}
+		if notion.CanonicalizeNotionURL(val) != val {
+			count++
+		}
+	}
+	return count
+}
+
 // stripFrozenAt removes any `notion-frozen-at:` line from the YAML frontmatter
 // of a Markdown file. Body content is not touched. Returns the modified content
 // and the number of lines stripped.
@@ -259,6 +317,46 @@ func indexOfFrontmatterClose(rest string) int {
 		i += nl + 1
 	}
 	return -1
+}
+
+// canonicalizeFrontmatterURL rewrites the value of `notion-url:` inside YAML
+// frontmatter to the canonical app.notion.com/p/{id} form. Body content is not
+// touched. Returns the modified content and the number of URLs that were
+// changed (0 if the URL was already canonical or had no extractable Notion ID).
+func canonicalizeFrontmatterURL(s string) (string, int) {
+	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
+		return s, 0
+	}
+	openLen := 4
+	if strings.HasPrefix(s, "---\r\n") {
+		openLen = 5
+	}
+
+	rest := s[openLen:]
+	closeIdx := indexOfFrontmatterClose(rest)
+	if closeIdx < 0 {
+		return s, 0
+	}
+
+	count := 0
+	fmRegion := rest[:closeIdx]
+	rewritten := notionURLLinePattern.ReplaceAllStringFunc(fmRegion, func(match string) string {
+		groups := notionURLLinePattern.FindStringSubmatch(match)
+		if len(groups) != 4 {
+			return match
+		}
+		prefix, value, suffix := groups[1], groups[2], groups[3]
+		canonical := notion.CanonicalizeNotionURL(value)
+		if canonical == value {
+			return match
+		}
+		count++
+		return prefix + canonical + suffix
+	})
+	if count == 0 {
+		return s, 0
+	}
+	return s[:openLen] + rewritten + rest[closeIdx:], count
 }
 
 // stripContent returns the input with all S3 pre-signed query strings removed,

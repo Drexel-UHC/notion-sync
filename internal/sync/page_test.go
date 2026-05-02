@@ -485,6 +485,38 @@ func TestFreezePage_DoesNotEmitFrozenAt(t *testing.T) {
 	}
 }
 
+func TestFreezePage_CanonicalizesNotionURLInFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	page := testPage("1234567890abcdef1234567890abcdef", "Url Test", "2025-01-01T00:00:00Z")
+	page.URL = "https://www.notion.so/Url-Test-1234567890abcdef1234567890abcdef"
+	client := newMockClient()
+	client.pages[page.ID] = &page
+	client.blocks[page.ID] = []notion.Block{}
+
+	_, err := FreezePage(FreezePageOptions{
+		Client:       client,
+		NotionID:     page.ID,
+		OutputFolder: dir,
+		DatabaseID:   "db-1",
+		Page:         &page,
+	})
+	if err != nil {
+		t.Fatalf("FreezePage: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, page.ID+".md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "https://app.notion.com/p/1234567890abcdef1234567890abcdef"
+	if !strings.Contains(string(data), want) {
+		t.Errorf("frontmatter missing canonical URL %q:\n%s", want, data)
+	}
+	if strings.Contains(string(data), "https://www.notion.so/") {
+		t.Errorf("frontmatter still contains legacy notion.so URL:\n%s", data)
+	}
+}
+
 func TestFreezePage_TrailingNewline(t *testing.T) {
 	dir := t.TempDir()
 	page := testPage("page-id-001", "My Page", "2025-01-01T00:00:00Z")
