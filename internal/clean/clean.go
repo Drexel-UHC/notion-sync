@@ -10,6 +10,10 @@
 //   - Removes the deprecated `notion-frozen-at` line from YAML frontmatter. The
 //     field used to be written on every freeze, which churned every entry's
 //     diff even when content was byte-identical.
+//   - Canonicalizes `notion-url:` values in .md frontmatter and `"url"` fields
+//     in metadata JSON to the `app.notion.com/p/{id}` form, so legacy
+//     `www.notion.so/Title-{id}` URLs from earlier syncs stop drifting against
+//     newly emitted ones.
 //   - Ensures .md and .json files end with a trailing newline.
 //
 // For each folder it modifies, the corresponding _database.json or _page.json
@@ -57,6 +61,8 @@ type Result struct {
 // Folder walks `root` recursively and applies cleanups to eligible files:
 //   - strips pre-signed S3 query strings from `.md` files
 //   - removes `notion-frozen-at:` lines from `.md` frontmatter
+//   - canonicalizes `notion-url:` values in `.md` frontmatter and `"url"`
+//     fields in `_database.json` / `_page.json`
 //   - appends a trailing newline to `.md` and `.json` files that are missing one
 //
 // After the walk, any folder whose files were modified has its `_database.json`
@@ -67,6 +73,12 @@ type Result struct {
 func Folder(root string, dryRun bool) (*Result, error) {
 	r := &Result{DryRun: dryRun}
 	dirtyDirs := make(map[string]bool)
+	// Per-folder count of non-canonical "url" values found in metadata JSON.
+	// Counted at walk time but only added to URLsCanonicalized once the
+	// corresponding bumpFolderMetadata succeeds (or, in dry-run, would
+	// succeed) — otherwise the user-visible counter would lie when
+	// sync.Version is unset or the metadata file fails to round-trip.
+	jsonURLCounts := make(map[string]int)
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -123,15 +135,18 @@ func Folder(root string, dryRun bool) (*Result, error) {
 			changed = true
 		}
 
-		// For metadata JSON, detect non-canonical Notion URLs and mark the
+		// For metadata JSON, record non-canonical Notion URLs and mark the
 		// folder dirty. The actual rewrite happens in bumpFolderMetadata, which
 		// goes through WriteDatabaseMetadata / WritePageMetadata — both
-		// canonicalize URLs as part of the write. Counting here gives users an
-		// accurate URLsCanonicalized total without duplicating rewrite logic.
+		// canonicalize URLs as part of the write. The count is held in
+		// jsonURLCounts and only folded into r.URLsCanonicalized after the
+		// rewrite is confirmed (or in dry-run, would be confirmed) — otherwise
+		// a missing sync.Version or an unparseable metadata file would leave
+		// the URL on disk while inflating the user-visible counter.
 		if isJSON && isMetadataFileName(d.Name()) {
 			ucount := countNonCanonicalNotionURLInJSON(out)
 			if ucount > 0 {
-				r.URLsCanonicalized += ucount
+				jsonURLCounts[filepath.Dir(path)] += ucount
 				dirtyDirs[filepath.Dir(path)] = true
 			}
 		}
@@ -174,12 +189,14 @@ func Folder(root string, dryRun bool) (*Result, error) {
 			}
 			if bumped {
 				r.MetadataBumped++
+				r.URLsCanonicalized += jsonURLCounts[dir]
 			}
 		}
 	} else if sync.Version != "" {
 		for dir := range dirtyDirs {
 			if folderHasMetadata(dir) {
 				r.MetadataBumped++
+				r.URLsCanonicalized += jsonURLCounts[dir]
 			}
 		}
 	}

@@ -97,6 +97,31 @@ func TestCanonicalizeNotionURL(t *testing.T) {
 			want: "https://example.com/some/path",
 		},
 		{
+			name: "non-Notion URL with embedded 32-hex passes through (host gate)",
+			in:   "https://example.com/file/1234567890abcdef1234567890abcdef.png",
+			want: "https://example.com/file/1234567890abcdef1234567890abcdef.png",
+		},
+		{
+			name: "github 40-hex commit SHA — not truncated to 32",
+			in:   "https://github.com/repo/commit/abcdef0123456789abcdef0123456789abcdef01",
+			want: "https://github.com/repo/commit/abcdef0123456789abcdef0123456789abcdef01",
+		},
+		{
+			name: "notion view URL with ?v= — uses page ID, not view ID",
+			in:   "https://www.notion.so/Title-1234567890abcdef1234567890abcdef?v=fedcba0987654321fedcba0987654321",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "notion URL with #blockId fragment — uses page ID, not block ID",
+			in:   "https://www.notion.so/Title-1234567890abcdef1234567890abcdef#fedcba0987654321fedcba0987654321",
+			want: "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+		},
+		{
+			name: "look-alike host evil-notion.so passes through",
+			in:   "https://evil-notion.so/Title-1234567890abcdef1234567890abcdef",
+			want: "https://evil-notion.so/Title-1234567890abcdef1234567890abcdef",
+		},
+		{
 			name: "empty string",
 			in:   "",
 			want: "",
