@@ -3,7 +3,30 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
+
+// agentsMDVersionPattern matches the version-stamp HTML comment emitted at the
+// top of AGENTS.md. The captured group is the version string (e.g. "v1.2.0").
+var agentsMDVersionPattern = regexp.MustCompile(`<!--\s*notion-sync-version:\s*(\S.*?)\s*-->`)
+
+// ParseAgentsMDVersion extracts the notion-sync version stamped into an
+// AGENTS.md file's content, or "" if the stamp is missing or empty.
+func ParseAgentsMDVersion(content string) string {
+	m := agentsMDVersionPattern.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// renderAgentsMD returns the AGENTS.md content with the current binary's
+// Version interpolated into the version stamp. If Version is unset (e.g. in
+// tests that don't wire it), the stamp value is empty.
+func renderAgentsMD() string {
+	return strings.Replace(agentsMDTemplate, "{{VERSION}}", Version, 1)
+}
 
 // agentsMDContent is written to the workspace root as AGENTS.md so that any
 // downstream LLM/agent that lands in a notion-sync output folder understands
@@ -12,7 +35,8 @@ import (
 // AGENTS.md is the cross-vendor convention (Cursor, OpenAI's agents.md spec,
 // and others) for provider-neutral agent instructions. Claude Code reads it
 // alongside CLAUDE.md.
-const agentsMDContent = `# notion-sync workspace
+const agentsMDTemplate = `<!-- notion-sync-version: {{VERSION}} -->
+# notion-sync workspace
 
 This folder contains data synced from Notion using [notion-sync](https://github.com/ran-codes/notion-sync).
 This file (AGENTS.md) tells downstream LLM/agent tools how to interpret the contents.
@@ -149,7 +173,8 @@ For multi-source databases, the **top-level** ` + "`_database.json`" + ` has no 
 - Default ` + "`refresh`" + ` is incremental: entries whose ` + "`notion-last-edited`" + ` matches the local copy are skipped.
 - ` + "`refresh --force`" + ` resyncs every entry regardless of timestamp.
 - ` + "`refresh --ids id1,id2`" + ` resyncs specific pages by ID.
-- ` + "`clean <folder>`" + ` performs in-place cleanups **without** any API call — strips presigned URLs, removes the deprecated ` + "`notion-frozen-at`" + ` frontmatter line, and ensures trailing newlines on ` + "`.md`" + `/` + "`.json`" + ` files. Any folder it modifies has its ` + "`_database.json`" + ` or ` + "`_page.json`" + ` re-stamped with the current ` + "`syncVersion`" + ` so the workspace records which binary last touched it. Used as a one-time backfill after upgrading.
+- ` + "`clean <folder>`" + ` performs in-place cleanups **without** any API call — strips presigned URLs, removes the deprecated ` + "`notion-frozen-at`" + ` frontmatter line, and ensures trailing newlines on ` + "`.md`" + `/` + "`.json`" + ` files. Any folder it modifies has its ` + "`_database.json`" + ` or ` + "`_page.json`" + ` re-stamped with the current ` + "`syncVersion`" + ` so the workspace records which binary last touched it. Also regenerates ` + "`AGENTS.md`" + ` (this file) when its version stamp is older than the running binary. Used as a one-time backfill after upgrading.
+- ` + "`agents-md <folder>`" + ` regenerates ` + "`AGENTS.md`" + ` from the running binary, **always overwriting** any existing copy. Use this when you want the latest doc unconditionally; ` + "`clean`" + ` is the safer default that only rewrites on stamp drift.
 
 ## Push semantics (writing local changes back to Notion)
 
@@ -172,5 +197,44 @@ func WriteAgentsMD(workspacePath string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return nil // file exists, don't overwrite
 	}
-	return os.WriteFile(dest, []byte(agentsMDContent), 0644)
+	return os.WriteFile(dest, []byte(renderAgentsMD()), 0644)
+}
+
+// RegenerateAgentsMD writes AGENTS.md to the workspace root, overwriting any
+// existing file. Used by `notion-sync agents-md` for explicit user-driven
+// refreshes — the command name is the consent.
+func RegenerateAgentsMD(workspacePath string) error {
+	dest := filepath.Join(workspacePath, "AGENTS.md")
+	return os.WriteFile(dest, []byte(renderAgentsMD()), 0644)
+}
+
+// EnsureAgentsMDCurrent writes AGENTS.md to the workspace root if it is
+// missing, or if its embedded version stamp does not match the current
+// binary's Version. Used by `clean` to keep the doc in sync with the binary
+// post-upgrade without clobbering an already-current file.
+//
+// Returns true if a write happened (or, in dryRun, would have happened).
+//
+// If Version is unset (build-time -ldflags not wired), this is a no-op — we
+// have nothing meaningful to stamp. Mirrors the guard in bumpFolderMetadata.
+func EnsureAgentsMDCurrent(workspacePath string, dryRun bool) (bool, error) {
+	if Version == "" {
+		return false, nil
+	}
+	dest := filepath.Join(workspacePath, "AGENTS.md")
+	existing, err := os.ReadFile(dest)
+	if err == nil {
+		if ParseAgentsMDVersion(string(existing)) == Version {
+			return false, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	if dryRun {
+		return true, nil
+	}
+	if err := os.WriteFile(dest, []byte(renderAgentsMD()), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
 }

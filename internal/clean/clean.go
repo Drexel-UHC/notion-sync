@@ -55,6 +55,7 @@ type Result struct {
 	FrozenAtStripped  int
 	URLsCanonicalized int
 	MetadataBumped    int
+	AgentsMDWritten   int
 	DryRun            bool
 }
 
@@ -72,6 +73,19 @@ type Result struct {
 // have changed.
 func Folder(root string, dryRun bool) (*Result, error) {
 	r := &Result{DryRun: dryRun}
+
+	// Refresh AGENTS.md at the workspace root if its embedded version stamp is
+	// missing or differs from the running binary. Conservative by design: if
+	// the stamp is current we leave the file alone, even if the user has
+	// hand-edited it. The dedicated `agents-md` subcommand exists for the
+	// always-overwrite case.
+	written, err := sync.EnsureAgentsMDCurrent(root, dryRun)
+	if err != nil {
+		return r, err
+	}
+	if written {
+		r.AgentsMDWritten++
+	}
 	dirtyDirs := make(map[string]bool)
 	// Per-folder count of non-canonical "url" values found in metadata JSON.
 	// Counted at walk time but only added to URLsCanonicalized once the
@@ -80,7 +94,7 @@ func Folder(root string, dryRun bool) (*Result, error) {
 	// sync.Version is unset or the metadata file fails to round-trip.
 	jsonURLCounts := make(map[string]int)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
