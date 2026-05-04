@@ -976,6 +976,14 @@ func TestCountNonCanonicalFolderPathInJSON(t *testing.T) {
 			json: `{"folderPath": ""}`,
 			want: 0,
 		},
+		{
+			// Go's json.Marshal escapes `&` as `\u0026` (HTML-escape on by
+			// default), which contains a single backslash but is not a path
+			// separator. The detector must not treat this as non-canonical.
+			name: "ampersand HTML-escape is not a separator",
+			json: `{"folderPath": "Foo \u0026 Bar"}`,
+			want: 0,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

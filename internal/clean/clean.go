@@ -334,19 +334,21 @@ func countNonCanonicalNotionURLInJSON(s string) int {
 }
 
 // countNonCanonicalFolderPathInJSON returns the number of `"folderPath": "..."`
-// fields in the JSON content whose value contains a backslash separator. JSON
-// encodes a literal backslash as `\\`, so the captured raw bytes contain `\\`
-// for each separator — `strings.Contains(val, "\\")` matches that. folderPath
-// values are filesystem paths, which won't legitimately carry other escape
-// sequences, so any backslash means the path was serialized with the host's
-// native separator.
+// fields in the JSON content whose value contains a backslash separator. A
+// real backslash in the path is encoded by JSON as `\\` (two raw bytes in
+// the captured value), so we check for two consecutive backslashes.
+//
+// Checking for a single backslash would over-count: Go's json.Marshal runs
+// with HTML escape enabled, so paths containing `&`, `<`, or `>` are emitted
+// as `\u0026`, `\u003c`, `\u003e` — escape sequences that contain
+// a single backslash but are not path separators.
 func countNonCanonicalFolderPathInJSON(s string) int {
 	count := 0
 	for _, m := range jsonFolderPathValuePattern.FindAllStringSubmatch(s, -1) {
 		if len(m) < 2 {
 			continue
 		}
-		if strings.Contains(m[1], `\`) {
+		if strings.Contains(m[1], `\\`) {
 			count++
 		}
 	}
