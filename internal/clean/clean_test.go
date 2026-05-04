@@ -948,6 +948,194 @@ body
 	}
 }
 
+func TestCountNonCanonicalFolderPathInJSON(t *testing.T) {
+	// `\\` in a Go raw string is two literal backslash characters, which is
+	// exactly how JSON encodes a single backslash on disk.
+	tests := []struct {
+		name string
+		json string
+		want int
+	}{
+		{
+			name: "windows separator",
+			json: `{"folderPath": "_etl\\notion-sync\\v1\\Foo"}`,
+			want: 1,
+		},
+		{
+			name: "forward slash",
+			json: `{"folderPath": "_etl/notion-sync/v1/Foo"}`,
+			want: 0,
+		},
+		{
+			name: "missing field",
+			json: `{"databaseId": "abc"}`,
+			want: 0,
+		},
+		{
+			name: "empty value",
+			json: `{"folderPath": ""}`,
+			want: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := countNonCanonicalFolderPathInJSON(tc.json)
+			if got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFolder_NormalizesFolderPathInDatabaseJSON(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	dbJSON := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+  "folderPath": "_etl\\notion-sync\\v1\\Foo",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FolderPathsNormalized != 1 {
+		t.Errorf("FolderPathsNormalized = %d, want 1", r.FolderPathsNormalized)
+	}
+	if r.MetadataBumped != 1 {
+		t.Errorf("MetadataBumped = %d, want 1 (folderPath-only change must trigger bump)", r.MetadataBumped)
+	}
+
+	got, _ := os.ReadFile(dbPath)
+	if !strings.Contains(string(got), `"folderPath": "_etl/notion-sync/v1/Foo"`) {
+		t.Errorf("_database.json folderPath not normalized:\n%s", got)
+	}
+	if strings.Contains(string(got), `\\`) {
+		t.Errorf("_database.json still contains backslashes:\n%s", got)
+	}
+}
+
+func TestFolder_NormalizesFolderPathInPageJSON(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	root := t.TempDir()
+	pageDir := filepath.Join(root, "pages", "MyPage_abc12345")
+	if err := os.MkdirAll(pageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	pageJSON := `{
+  "pageId": "page-1",
+  "title": "MyPage",
+  "url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+  "folderPath": "pages\\MyPage_abc12345",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "syncVersion": "v0.5.0"
+}
+`
+	pagePath := filepath.Join(pageDir, "_page.json")
+	if err := os.WriteFile(pagePath, []byte(pageJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FolderPathsNormalized != 1 {
+		t.Errorf("FolderPathsNormalized = %d, want 1", r.FolderPathsNormalized)
+	}
+
+	got, _ := os.ReadFile(pagePath)
+	if !strings.Contains(string(got), `"folderPath": "pages/MyPage_abc12345"`) {
+		t.Errorf("_page.json folderPath not normalized:\n%s", got)
+	}
+}
+
+func TestFolder_NormalizeFolderPath_DryRun(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	dbOriginal := `{
+  "databaseId": "db-1",
+  "url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+  "folderPath": "_etl\\notion-sync\\v1\\Foo",
+  "syncVersion": "v0.5.0"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbOriginal), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FolderPathsNormalized != 1 {
+		t.Errorf("dry-run FolderPathsNormalized = %d, want 1", r.FolderPathsNormalized)
+	}
+
+	got, _ := os.ReadFile(dbPath)
+	if string(got) != dbOriginal {
+		t.Errorf("dry-run mutated _database.json:\n%s", got)
+	}
+}
+
+func TestFolder_NormalizeFolderPath_Idempotent(t *testing.T) {
+	prev := sync.Version
+	sync.Version = "v0.99.0-test"
+	t.Cleanup(func() { sync.Version = prev })
+
+	dir := t.TempDir()
+	dbContent := `{
+  "databaseId": "db-1",
+  "title": "Test",
+  "url": "https://app.notion.com/p/1234567890abcdef1234567890abcdef",
+  "folderPath": "_etl/notion-sync/v1/Foo",
+  "lastSyncedAt": "2024-01-01T00:00:00Z",
+  "entryCount": 1,
+  "syncVersion": "v0.99.0-test"
+}
+`
+	dbPath := filepath.Join(dir, "_database.json")
+	if err := os.WriteFile(dbPath, []byte(dbContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Folder(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FolderPathsNormalized != 0 {
+		t.Errorf("FolderPathsNormalized = %d, want 0 (already canonical)", r.FolderPathsNormalized)
+	}
+	if r.MetadataBumped != 0 {
+		t.Errorf("MetadataBumped = %d, want 0 (no changes ⇒ no bump)", r.MetadataBumped)
+	}
+
+	got, _ := os.ReadFile(dbPath)
+	if string(got) != dbContent {
+		t.Errorf("_database.json was mutated:\n%s", got)
+	}
+}
+
 func TestFolder_RegeneratesStaleAgentsMD(t *testing.T) {
 	prev := sync.Version
 	sync.Version = "v9.9.9-test"

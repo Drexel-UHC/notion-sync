@@ -40,6 +40,7 @@ func WriteDatabaseMetadata(folderPath string, metadata *FrozenDatabase) error {
 		metadata.SyncVersion = Version
 	}
 	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
+	metadata.FolderPath = filepath.ToSlash(metadata.FolderPath)
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
@@ -78,6 +79,7 @@ func WritePageMetadata(folderPath string, metadata *FrozenPage) error {
 		metadata.SyncVersion = Version
 	}
 	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
+	metadata.FolderPath = filepath.ToSlash(metadata.FolderPath)
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
