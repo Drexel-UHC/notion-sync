@@ -601,8 +601,8 @@ func runClean(args []string) error {
 		bumpLabel = "Would stamp"
 	}
 	fmt.Printf("Scanned: %d files\n", r.FilesScanned)
-	fmt.Printf("%s: %d files (%d URLs stripped, %d trailing newlines added, %d notion-frozen-at lines stripped)\n",
-		label, r.FilesChanged, r.URLsStripped, r.NewlinesFixed, r.FrozenAtStripped)
+	fmt.Printf("%s: %d files (%d URLs stripped, %d URLs canonicalized, %d trailing newlines added, %d notion-frozen-at lines stripped)\n",
+		label, r.FilesChanged, r.URLsStripped, r.URLsCanonicalized, r.NewlinesFixed, r.FrozenAtStripped)
 	fmt.Printf("%s syncVersion in: %d folder(s)\n", bumpLabel, r.MetadataBumped)
 	if r.AgentsMDWritten > 0 {
 		agentsLabel := "Regenerated"
