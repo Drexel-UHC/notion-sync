@@ -14,6 +14,9 @@
 //     in metadata JSON to the `app.notion.com/p/{id}` form, so legacy
 //     `www.notion.so/Title-{id}` URLs from earlier syncs stop drifting against
 //     newly emitted ones.
+//   - Normalizes `folderPath` values in metadata JSON to forward slashes, so
+//     workspaces synced on Windows stop leaking host-native backslashes into
+//     version-controlled snapshots.
 //   - Ensures .md and .json files end with a trailing newline.
 //
 // For each folder it modifies, the corresponding _database.json or _page.json
@@ -48,15 +51,16 @@ var presignedURLPattern = regexp.MustCompile(
 
 // Result summarizes a clean run.
 type Result struct {
-	FilesScanned      int
-	FilesChanged      int
-	URLsStripped      int
-	NewlinesFixed     int
-	FrozenAtStripped  int
-	URLsCanonicalized int
-	MetadataBumped    int
-	AgentsMDWritten   int
-	DryRun            bool
+	FilesScanned          int
+	FilesChanged          int
+	URLsStripped          int
+	NewlinesFixed         int
+	FrozenAtStripped      int
+	URLsCanonicalized     int
+	FolderPathsNormalized int
+	MetadataBumped        int
+	AgentsMDWritten       int
+	DryRun                bool
 }
 
 // Folder walks `root` recursively and applies cleanups to eligible files:
@@ -64,6 +68,8 @@ type Result struct {
 //   - removes `notion-frozen-at:` lines from `.md` frontmatter
 //   - canonicalizes `notion-url:` values in `.md` frontmatter and `"url"`
 //     fields in `_database.json` / `_page.json`
+//   - normalizes `folderPath` separators in `_database.json` / `_page.json`
+//     to forward slashes
 //   - appends a trailing newline to `.md` and `.json` files that are missing one
 //
 // After the walk, any folder whose files were modified has its `_database.json`
@@ -93,6 +99,11 @@ func Folder(root string, dryRun bool) (*Result, error) {
 	// succeed) — otherwise the user-visible counter would lie when
 	// sync.Version is unset or the metadata file fails to round-trip.
 	jsonURLCounts := make(map[string]int)
+	// Per-folder count of "folderPath" values that contain a host-native
+	// backslash separator. Same deferred-count discipline as jsonURLCounts —
+	// the rewrite happens inside WriteDatabaseMetadata / WritePageMetadata,
+	// so the counter is only folded in once the bump is confirmed.
+	jsonFolderPathCounts := make(map[string]int)
 
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -163,6 +174,11 @@ func Folder(root string, dryRun bool) (*Result, error) {
 				jsonURLCounts[filepath.Dir(path)] += ucount
 				dirtyDirs[filepath.Dir(path)] = true
 			}
+			fpcount := countNonCanonicalFolderPathInJSON(out)
+			if fpcount > 0 {
+				jsonFolderPathCounts[filepath.Dir(path)] += fpcount
+				dirtyDirs[filepath.Dir(path)] = true
+			}
 		}
 
 		if !changed {
@@ -204,6 +220,7 @@ func Folder(root string, dryRun bool) (*Result, error) {
 			if bumped {
 				r.MetadataBumped++
 				r.URLsCanonicalized += jsonURLCounts[dir]
+				r.FolderPathsNormalized += jsonFolderPathCounts[dir]
 			}
 		}
 	} else if sync.Version != "" {
@@ -211,6 +228,7 @@ func Folder(root string, dryRun bool) (*Result, error) {
 			if folderHasMetadata(dir) {
 				r.MetadataBumped++
 				r.URLsCanonicalized += jsonURLCounts[dir]
+				r.FolderPathsNormalized += jsonFolderPathCounts[dir]
 			}
 		}
 	}
@@ -283,6 +301,11 @@ var notionURLLinePattern = regexp.MustCompile(`(?m)^([ \t]*notion-url[ \t]*:[ \t
 // Used to detect non-canonical Notion URLs in _database.json / _page.json.
 var jsonURLValuePattern = regexp.MustCompile(`"url"\s*:\s*"([^"]*)"`)
 
+// jsonFolderPathValuePattern matches a JSON `"folderPath": "..."` field and
+// captures the raw (still-JSON-escaped) value. Used to detect host-native
+// backslash separators leaked into metadata by Windows-side syncs.
+var jsonFolderPathValuePattern = regexp.MustCompile(`"folderPath"\s*:\s*"([^"]*)"`)
+
 // isMetadataFileName reports whether the given basename is one of the
 // notion-sync metadata files (case-insensitive on the file's lowercase form).
 func isMetadataFileName(name string) bool {
@@ -304,6 +327,28 @@ func countNonCanonicalNotionURLInJSON(s string) int {
 			continue
 		}
 		if notion.CanonicalizeNotionURL(val) != val {
+			count++
+		}
+	}
+	return count
+}
+
+// countNonCanonicalFolderPathInJSON returns the number of `"folderPath": "..."`
+// fields in the JSON content whose value contains a backslash separator. A
+// real backslash in the path is encoded by JSON as `\\` (two raw bytes in
+// the captured value), so we check for two consecutive backslashes.
+//
+// Checking for a single backslash would over-count: Go's json.Marshal runs
+// with HTML escape enabled, so paths containing `&`, `<`, or `>` are emitted
+// as `\u0026`, `\u003c`, `\u003e` — escape sequences that contain
+// a single backslash but are not path separators.
+func countNonCanonicalFolderPathInJSON(s string) int {
+	count := 0
+	for _, m := range jsonFolderPathValuePattern.FindAllStringSubmatch(s, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		if strings.Contains(m[1], `\\`) {
 			count++
 		}
 	}

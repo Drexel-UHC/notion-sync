@@ -159,6 +159,47 @@ func TestWritePageMetadata_CanonicalizesURL(t *testing.T) {
 	}
 }
 
+func TestWriteDatabaseMetadata_NormalizesFolderPathSeparator(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenDatabase{
+		DatabaseID: "abc",
+		Title:      "T",
+		FolderPath: `_etl\notion-sync\v1\Foo`,
+		EntryCount: 1,
+	}
+	if err := WriteDatabaseMetadata(dir, meta); err != nil {
+		t.Fatalf("WriteDatabaseMetadata: %v", err)
+	}
+	got, err := ReadDatabaseMetadata(dir)
+	if err != nil {
+		t.Fatalf("ReadDatabaseMetadata: %v", err)
+	}
+	want := "_etl/notion-sync/v1/Foo"
+	if got.FolderPath != want {
+		t.Errorf("FolderPath = %q, want %q", got.FolderPath, want)
+	}
+}
+
+func TestWritePageMetadata_NormalizesFolderPathSeparator(t *testing.T) {
+	dir := t.TempDir()
+	meta := &FrozenPage{
+		PageID:     "abc",
+		Title:      "T",
+		FolderPath: `pages\MyPage_abc`,
+	}
+	if err := WritePageMetadata(dir, meta); err != nil {
+		t.Fatalf("WritePageMetadata: %v", err)
+	}
+	got, err := ReadPageMetadata(dir)
+	if err != nil {
+		t.Fatalf("ReadPageMetadata: %v", err)
+	}
+	want := "pages/MyPage_abc"
+	if got.FolderPath != want {
+		t.Errorf("FolderPath = %q, want %q", got.FolderPath, want)
+	}
+}
+
 func TestWritePageMetadata_TrailingNewline(t *testing.T) {
 	dir := t.TempDir()
 	meta := &FrozenPage{PageID: "abc", Title: "T"}

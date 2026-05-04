@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
@@ -40,6 +41,13 @@ func WriteDatabaseMetadata(folderPath string, metadata *FrozenDatabase) error {
 		metadata.SyncVersion = Version
 	}
 	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
+	// Replace backslashes unconditionally rather than using filepath.ToSlash —
+	// ToSlash only converts on Windows, but a Linux user running `clean` on a
+	// Windows-synced workspace also needs to canonicalize the backslashes that
+	// the Windows binary previously wrote. The whole point of the migration is
+	// to make folderPath host-invariant in the snapshot, so the rewrite must
+	// not depend on the host that's doing the rewriting.
+	metadata.FolderPath = strings.ReplaceAll(metadata.FolderPath, `\`, "/")
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
@@ -78,6 +86,13 @@ func WritePageMetadata(folderPath string, metadata *FrozenPage) error {
 		metadata.SyncVersion = Version
 	}
 	metadata.URL = notion.CanonicalizeNotionURL(metadata.URL)
+	// Replace backslashes unconditionally rather than using filepath.ToSlash —
+	// ToSlash only converts on Windows, but a Linux user running `clean` on a
+	// Windows-synced workspace also needs to canonicalize the backslashes that
+	// the Windows binary previously wrote. The whole point of the migration is
+	// to make folderPath host-invariant in the snapshot, so the rewrite must
+	// not depend on the host that's doing the rewriting.
+	metadata.FolderPath = strings.ReplaceAll(metadata.FolderPath, `\`, "/")
 
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
