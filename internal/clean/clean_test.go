@@ -1112,6 +1112,11 @@ func TestFolder_NormalizeFolderPath_Idempotent(t *testing.T) {
 	t.Cleanup(func() { sync.Version = prev })
 
 	dir := t.TempDir()
+	// Seed with a stale syncVersion that differs from sync.Version. If the
+	// folder ever gets falsely flagged as dirty, the bump pass will overwrite
+	// this with "v0.99.0-test" and the byte-equality check at the end will
+	// catch it. Seeding with the current version would mask a false bump,
+	// since rewriting an already-current file produces identical bytes.
 	dbContent := `{
   "databaseId": "db-1",
   "title": "Test",
@@ -1119,7 +1124,7 @@ func TestFolder_NormalizeFolderPath_Idempotent(t *testing.T) {
   "folderPath": "_etl/notion-sync/v1/Foo",
   "lastSyncedAt": "2024-01-01T00:00:00Z",
   "entryCount": 1,
-  "syncVersion": "v0.99.0-test"
+  "syncVersion": "v0.5.0"
 }
 `
 	dbPath := filepath.Join(dir, "_database.json")
