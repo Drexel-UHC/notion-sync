@@ -132,10 +132,6 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
-	// Preserve file mtime from Notion's last_edited_time
-	if lastEdited, err := time.Parse(time.RFC3339, page.LastEditedTime); err == nil {
-		os.Chtimes(filePath, lastEdited, lastEdited)
-	}
 
 	status := "created"
 	if exists {
