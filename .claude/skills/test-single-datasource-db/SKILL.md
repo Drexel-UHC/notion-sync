@@ -99,9 +99,9 @@ Also check `_database.json` in the synced folder: its `"url"` line must match `"
 
 - **Pass criteria:** First 3 keys found with valid non-null values; `notion-frozen-at` produces zero matches across all `.md` files; every `.md` file has a `notion-url` line matching the anchored canonical pattern, and `_database.json`'s `"url"` matches the anchored canonical pattern.
 
-### Step 9: Verify file mtime preservation
+### Step 9: Verify file mtime is not pinned to Notion's last_edited_time
 For each synced `.md` file, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
-- **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
+- **Pass criteria:** File mtime is **not** within 1 second of `notion-last-edited` for any file (regression guard — ref PR #75: pinning mtime backwards to Notion's timestamp defeated git's stat-cache and caused silent loss on same-length rewrites; mtime must reflect actual write time so `git status` invalidates correctly. The authoritative timestamp lives in `notion-last-edited` frontmatter).
 
 ### Step 9b: Pick a push test page and snapshot originals
 Pick a page **other than the one edited in Step 4** (call it page B). Read its local `.md` file and record the original values for these properties (you'll need them for Step 9d):

@@ -148,9 +148,9 @@ Run: `./notion-sync.exe refresh "./test-output/test database - double data sourc
 Run: `./notion-sync.exe refresh "./test-output/test database - double data source" --force`
 - **Pass criteria:** updated = total (>= 14), skipped = 0.
 
-### Step 11: Verify file mtime preservation
+### Step 11: Verify file mtime is not pinned to Notion's last_edited_time
 For each synced `.md` file in both `Projects/` and `Clients/`, compare the file's modification time (via `stat`) against the `notion-last-edited` value in its frontmatter.
-- **Pass criteria:** File mtime matches `notion-last-edited` timestamp (within 1-second tolerance).
+- **Pass criteria:** File mtime is **not** within 1 second of `notion-last-edited` for any file (regression guard — ref PR #75: pinning mtime backwards to Notion's timestamp defeated git's stat-cache and caused silent loss on same-length rewrites; mtime must reflect actual write time so `git status` invalidates correctly. The authoritative timestamp lives in `notion-last-edited` frontmatter).
 
 ### Step 12: Revert Notion changes
 Use Notion MCP tools to restore the page edited in Step 8 back to its original property values and content. This keeps the test database clean for the next run.
