@@ -30,12 +30,42 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// testBinaryPath is the absolute path to a notion-sync binary built once in
+// TestMain and reused across every test invocation in this package's e2e
+// tests. Building once instead of `go run`-ing per call keeps a 4-invocation
+// test from paying 4× the toolchain build cost.
+var testBinaryPath string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "notion-sync-e2e-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "test bin temp dir:", err)
+		os.Exit(2)
+	}
+	bin := "notion-sync-e2e"
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	testBinaryPath = filepath.Join(dir, bin)
+	if out, err := exec.Command("go", "build", "-o", testBinaryPath, ".").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "test bin build failed: %v\n%s\n", err, out)
+		os.RemoveAll(dir)
+		os.Exit(2)
+	}
+
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 const (
 	legacyEntryID     = "1234567890abcdef1234567890abcdef"
@@ -143,12 +173,17 @@ func TestCLI_Clean_AppliesAllMigrations(t *testing.T) {
 	//   1 S3 URL  · 3 notion URLs (1 .md + 2 .json) · 2 backslash folderPaths
 	//   1 frozen-at line · 1 file missing trailing newline
 	//   2 metadata folders bumped (My Database + pages/My Page_fedcba98)
+	// Anchor each count with the literal punctuation that immediately precedes
+	// it in the summary line:
+	//   "Modified: N files (N URLs stripped, N URLs canonicalized, ...)"
+	// Without the leading "(" / ", " anchors, "1 URLs stripped" would also
+	// match "11 URLs stripped" and any future double-digit counts.
 	expectedCounts := []string{
-		"1 URLs stripped",
-		"3 URLs canonicalized",
-		"2 folderPaths normalized",
-		"1 trailing newlines added",
-		"1 notion-frozen-at lines stripped",
+		"(1 URLs stripped",
+		", 3 URLs canonicalized",
+		", 2 folderPaths normalized",
+		", 1 trailing newlines added",
+		", 1 notion-frozen-at lines stripped",
 	}
 
 	// Phase 1: dry-run reports counts but does not mutate disk.
@@ -213,11 +248,11 @@ func TestCLI_Clean_AppliesAllMigrations(t *testing.T) {
 	out = mustRunClean(t, p.workspace, false)
 	for _, want := range []string{
 		"Modified: 0 files",
-		"0 URLs stripped",
-		"0 URLs canonicalized",
-		"0 folderPaths normalized",
-		"0 trailing newlines added",
-		"0 notion-frozen-at lines stripped",
+		"(0 URLs stripped",
+		", 0 URLs canonicalized",
+		", 0 folderPaths normalized",
+		", 0 trailing newlines added",
+		", 0 notion-frozen-at lines stripped",
 		"Stamped syncVersion in: 0 folder(s)",
 	} {
 		if !strings.Contains(out, want) {
@@ -230,18 +265,25 @@ func TestCLI_Clean_AppliesAllMigrations(t *testing.T) {
 }
 
 func TestCLI_Clean_MissingFolderArg_ExitOne(t *testing.T) {
-	if err := exec.Command("go", "run", ".", "clean").Run(); err == nil {
-		t.Error("expected non-zero exit when folder arg is missing")
+	out, err := exec.Command(testBinaryPath, "clean").CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit when folder arg is missing\n--- output ---\n%s", out)
+	}
+	// Anchor on the actual error string from runClean so this test fails
+	// loudly if `clean` ever exits non-zero for an unrelated reason (build
+	// regression, panic, different validation path).
+	if !strings.Contains(string(out), "missing folder path") {
+		t.Errorf("expected 'missing folder path' in stderr, got:\n%s", out)
 	}
 }
 
 func mustRunClean(t *testing.T, workspace string, dryRun bool) string {
 	t.Helper()
-	args := []string{"run", ".", "clean", workspace}
+	args := []string{"clean", workspace}
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
-	out, err := exec.Command("go", args...).CombinedOutput()
+	out, err := exec.Command(testBinaryPath, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("clean failed (dryRun=%v): %v\n%s", dryRun, err, out)
 	}
