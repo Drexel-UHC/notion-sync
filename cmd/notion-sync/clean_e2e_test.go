@@ -224,10 +224,21 @@ func TestCLI_Clean_AppliesAllMigrations(t *testing.T) {
 	}
 
 	// Migration #4, #5, #7 — _database.json
-	expectMetadataMigrated(t, p.dbJSON, canonicalDBURL, "[db]")
+	expectMetadataMigrated(t, p.dbJSON, expectedMeta{
+		URL:          canonicalDBURL,
+		ID:           "abcdefabcdefabcdefabcdefabcdefab",
+		Title:        "My Database",
+		LastSyncedAt: "2026-01-01T00:00:00Z",
+		EntryCount:   1,
+	}, "[db]")
 
 	// Migration #4, #5, #8 — _page.json
-	expectMetadataMigrated(t, p.pageJSON, canonicalPageURL, "[page]")
+	expectMetadataMigrated(t, p.pageJSON, expectedMeta{
+		URL:          canonicalPageURL,
+		ID:           "fedcba9876543210fedcba9876543210",
+		Title:        "My Page",
+		LastSyncedAt: "2026-01-01T00:00:00Z",
+	}, "[page]")
 
 	// Migration #6 — page.md trailing newline added
 	pageAfter := readFile(t, p.pageMD)
@@ -235,13 +246,13 @@ func TestCLI_Clean_AppliesAllMigrations(t *testing.T) {
 		t.Errorf("[#6] page.md missing trailing newline:\n%q", pageAfter)
 	}
 
-	// Migration #9 — AGENTS.md regenerated with current stamp
+	// Migration #9 — AGENTS.md regenerated with current binary's version stamp.
+	// The TestMain build runs `go build` without -ldflags, so `version` stays at
+	// its source default ("dev"). Anchor on that exact stamp so a regression
+	// that writes the wrong version (e.g., a hardcoded constant) fails loudly.
 	agentsAfter := readFile(t, p.agentsMD)
-	if strings.Contains(agentsAfter, "v0.0.1") {
-		t.Errorf("[#9] AGENTS.md still has stale stamp:\n%s", agentsAfter)
-	}
-	if !strings.Contains(agentsAfter, "<!-- notion-sync-version:") {
-		t.Errorf("[#9] AGENTS.md missing version stamp:\n%s", agentsAfter)
+	if !strings.Contains(agentsAfter, "<!-- notion-sync-version: dev -->") {
+		t.Errorf("[#9] AGENTS.md missing expected version stamp '<!-- notion-sync-version: dev -->':\n%s", agentsAfter)
 	}
 
 	// Phase 3: idempotency — second run reports zero work for every counter.
@@ -306,21 +317,44 @@ func expectUnchanged(t *testing.T, path, original, label string) {
 	}
 }
 
+// expectedMeta captures both the migrated values (URL) and the round-trip
+// values that must survive the syncVersion bump. EntryCount is page-vs-db
+// asymmetric: _database.json carries it, _page.json does not — a zero value
+// is treated as "not part of this metadata type, skip the check."
+type expectedMeta struct {
+	URL          string
+	ID           string // databaseId or pageId
+	Title        string
+	LastSyncedAt string
+	EntryCount   int // 0 = skip (page metadata has no entryCount)
+}
+
 // expectMetadataMigrated asserts a metadata JSON file (_database.json or
 // _page.json) had its url canonicalized, folderPath de-backslashed, and
-// syncVersion bumped off the stale "v0.0.1" seed value.
-func expectMetadataMigrated(t *testing.T, path, wantURL, tag string) {
+// syncVersion bumped off the stale "v0.0.1" seed value. It also asserts that
+// the rest of the struct round-tripped unchanged through the bump — the bump
+// goes through Write{Database,Page}Metadata, so a regression that drops a
+// field (entryCount, lastSyncedAt, title, id) would be invisible if we only
+// asserted on the migrated fields.
+func expectMetadataMigrated(t *testing.T, path string, want expectedMeta, tag string) {
 	t.Helper()
 	var meta struct {
-		URL         string `json:"url"`
-		FolderPath  string `json:"folderPath"`
-		SyncVersion string `json:"syncVersion"`
+		DatabaseID   string `json:"databaseId"`
+		PageID       string `json:"pageId"`
+		Title        string `json:"title"`
+		URL          string `json:"url"`
+		FolderPath   string `json:"folderPath"`
+		LastSyncedAt string `json:"lastSyncedAt"`
+		EntryCount   int    `json:"entryCount"`
+		SyncVersion  string `json:"syncVersion"`
 	}
 	if err := json.Unmarshal([]byte(readFile(t, path)), &meta); err != nil {
 		t.Fatalf("%s unmarshal: %v", tag, err)
 	}
-	if meta.URL != wantURL {
-		t.Errorf("%s [#4] url: got %q, want %q", tag, meta.URL, wantURL)
+
+	// Migrations.
+	if meta.URL != want.URL {
+		t.Errorf("%s [#4] url: got %q, want %q", tag, meta.URL, want.URL)
 	}
 	if strings.Contains(meta.FolderPath, `\`) {
 		t.Errorf("%s [#5] folderPath still contains backslash: %q", tag, meta.FolderPath)
@@ -330,6 +364,24 @@ func expectMetadataMigrated(t *testing.T, path, wantURL, tag string) {
 	}
 	if meta.SyncVersion == "" || meta.SyncVersion == "v0.0.1" {
 		t.Errorf("%s [#7/#8] syncVersion not bumped: got %q", tag, meta.SyncVersion)
+	}
+
+	// Preservation: fields that must round-trip unchanged through the bump.
+	id := meta.DatabaseID
+	if id == "" {
+		id = meta.PageID
+	}
+	if id != want.ID {
+		t.Errorf("%s preservation: id got %q, want %q", tag, id, want.ID)
+	}
+	if meta.Title != want.Title {
+		t.Errorf("%s preservation: title got %q, want %q", tag, meta.Title, want.Title)
+	}
+	if meta.LastSyncedAt != want.LastSyncedAt {
+		t.Errorf("%s preservation: lastSyncedAt got %q, want %q", tag, meta.LastSyncedAt, want.LastSyncedAt)
+	}
+	if want.EntryCount > 0 && meta.EntryCount != want.EntryCount {
+		t.Errorf("%s preservation: entryCount got %d, want %d", tag, meta.EntryCount, want.EntryCount)
 	}
 }
 
