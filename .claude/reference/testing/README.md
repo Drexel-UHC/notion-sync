@@ -9,7 +9,7 @@
 │                                                         │
 │  /test-single-datasource-db  /test-double-datasource-db │
 │  - import → refresh → --ids  - multi-source subfolders  │
-│  - --force, mtime, props     - cross-source relations   │
+│  - --force, no-pin, props    - cross-source relations   │
 │  - SQLite verification       - edge cases (nulls, 0,    │
 │  - scoped cleanup per DB       unicode, negative nums)  │
 │                                                         │

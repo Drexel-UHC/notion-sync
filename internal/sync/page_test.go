@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
@@ -514,6 +515,46 @@ func TestFreezePage_CanonicalizesNotionURLInFrontmatter(t *testing.T) {
 	}
 	if strings.Contains(string(data), "https://www.notion.so/") {
 		t.Errorf("frontmatter still contains legacy notion.so URL:\n%s", data)
+	}
+}
+
+func TestFreezePage_DoesNotPinMtimeToNotionTimestamp(t *testing.T) {
+	// Pinning the file's mtime to Notion's last_edited_time defeats git's
+	// stat-cache: a same-length rewrite where Notion's timestamp also did not
+	// move forward leaves (size, mtime, inode) unchanged, so `git status`
+	// reports the file clean even though its content changed on disk. The
+	// authoritative timestamp lives in `notion-last-edited` frontmatter; the
+	// filesystem mtime must reflect actual write time so git invalidates its
+	// stat-cache. See scr.md / salurbal.org PR #580 for the silent-loss repro.
+	dir := t.TempDir()
+	pastNotionTime := "2020-01-01T00:00:00Z"
+	page := testPage("page-mtime-test", "Mtime Test", pastNotionTime)
+	client := newMockClient()
+	client.pages[page.ID] = &page
+	client.blocks[page.ID] = []notion.Block{}
+
+	// Capture wall-clock floor with margin for filesystem mtime resolution
+	// (Windows FAT/NTFS can quantize to ~1s/2s).
+	before := time.Now().Add(-2 * time.Second)
+
+	_, err := FreezePage(FreezePageOptions{
+		Client:       client,
+		NotionID:     page.ID,
+		OutputFolder: dir,
+		DatabaseID:   "db-1",
+		Page:         &page,
+	})
+	if err != nil {
+		t.Fatalf("FreezePage: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, page.ID+".md"))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.ModTime().Before(before) {
+		t.Errorf("file mtime = %s is before test start %s — looks pinned to Notion's last_edited_time (%s); this defeats git's stat-cache",
+			info.ModTime().Format(time.RFC3339Nano), before.Format(time.RFC3339Nano), pastNotionTime)
 	}
 }
 
