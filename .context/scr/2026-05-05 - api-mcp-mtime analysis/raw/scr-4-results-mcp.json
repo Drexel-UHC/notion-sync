@@ -1,0 +1,78 @@
+{
+  "title": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "rich_text": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "number": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "select": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "multi_select": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "date": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "checkbox": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "url-set": {
+    "baseline": "2026-05-05T15:10:00.000Z",
+    "after": "2026-05-05T15:10:00.000Z",
+    "bumped": false
+  },
+  "url-clear": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  },
+  "email": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  },
+  "phone_number": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  },
+  "relation-set": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  },
+  "relation-clear": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  },
+  "files-set": {
+    "baseline": null,
+    "after": null,
+    "bumped": null,
+    "note": "skipped: MCP needs file IDs from upload"
+  },
+  "files-clear": {
+    "baseline": "2026-05-05T15:11:00.000Z",
+    "after": "2026-05-05T15:11:00.000Z",
+    "bumped": false
+  }
+}
