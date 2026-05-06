@@ -2,21 +2,18 @@
 %% ELI-PM: ideal flow after the push redesign epic lands.
 %% Four phases — user call (once), validation gate (all files first), push (per row), run summary.
 %% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
-%%
-%% ─── Glossary (frontmatter fields referenced below) ──────────────────────────
+%% --- Glossary (frontmatter fields referenced below) ---
 %%   local notion-last-edited : ISO timestamp in the local file's frontmatter
 %%                              recording Notion's last_edited_time at last sync.
 %%   notion-deleted: true     : frontmatter flag marking a soft-deleted row.
 %%   linked to Notion         : local file has a `notion-id` in frontmatter.
 %%   AGENTS.md                : generated downstream-agent guide; never a Notion row.
-%%
-%% ─── LOUD failure semantics (used at n34c, n34e, n34g) ───────────────────────
+%% --- LOUD failure semantics (used at n34c, n34e, n34g) ---
 %%   1. write a structured failure line to stderr (file path + reason + fix)
 %%   2. append entry to JSON `failed[]` (see schema below)
 %%   3. continue the row queue — do NOT abort the run
 %%   Run-level exit code: 0 if status==clean ; 1 if status==partial or halted.
-%%
-%% ─── Run summary JSON schema (emitted at n41) ────────────────────────────────
+%% --- Run summary JSON schema (emitted at n41) ---
 %%   {
 %%     "status":             "clean" | "partial" | "halted",
 %%     "pushed":             [{"file": "...", "fields": ["title", ...]}],
@@ -86,12 +83,12 @@ flowchart LR
         n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted-in-validation.<br/><br/>Agents parse this to decide next action.]
     end
 
-    %% ─── Phase handoffs (explicit node-to-node) ─────────────────────────────
+    %% Phase handoffs (explicit node-to-node)
     n14 --> n21
     n22b --> n31
     n37 -->|no| n41
 
-    %% ─── Universal report sink (every terminal reaches n41) ─────────────────
+    %% Universal report sink (every terminal reaches n41)
     n13a --> n41
     n21a --> n41
     n21b --> n41
