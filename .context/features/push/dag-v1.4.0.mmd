@@ -34,9 +34,19 @@ flowchart LR
         n32 -->|no| n32a[3.2a — Skip — nothing to push]
         n32 -->|yes| n33[3.3 — Send ONLY the changed<br/>fields to Notion]
         n33 --> n34{3.4 — Notion accepts<br/>the push?}
-        n34 -->|no| n34a[3.4a — Record error for this row.<br/>Local file unchanged.<br/>Will retry next run.]
-        n34 -->|yes| n35[3.5 — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
-        n35 --> n36[3.6 — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
+
+        n34 -->|yes| n34d{3.4d — Verify pushed fields<br/>were stored correctly<br/>Notion's response value ==<br/>what we sent re-encoded}
+        n34d -->|mismatch on a pushed field| n34e[3.4e — LOUD failure message:<br/>Notion stored value differently<br/>than we sent. Show field name +<br/>sent vs stored. Investigate before<br/>next push.]
+        n34d -->|all pushed fields match| n35a[3.5a — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
+        n35a --> n36a[3.6a — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
+
+        n34 -->|no| n34a[3.4a — First failure detected]
+        n34a --> n34b{3.4b — Retry 2 more times<br/>with delays<br/>e.g. 5s then 15s}
+        n34b -->|still failing| n34c[3.4c — LOUD failure message:<br/>show file path + Notion's error +<br/>what user/agent must fix<br/>before the next push run]
+        n34b -->|succeeds on retry| n34f{3.4f — Verify pushed fields<br/>were stored correctly<br/>same check as 3.4d}
+        n34f -->|mismatch on a pushed field| n34g[3.4g — LOUD failure message:<br/>Notion stored value differently<br/>than we sent on retry. Show field +<br/>sent vs stored. Investigate before<br/>next push.]
+        n34f -->|all pushed fields match| n35b[3.5b — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
+        n35b --> n36b[3.6b — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
     end
 
     Call --> Validate
