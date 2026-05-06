@@ -2,11 +2,34 @@
 %% ELI-PM: ideal flow after the push redesign epic lands.
 %% Four phases — user call (once), validation gate (all files first), push (per row), run summary.
 %% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
+%%
+%% ─── Glossary (frontmatter fields referenced below) ──────────────────────────
+%%   local notion-last-edited : ISO timestamp in the local file's frontmatter
+%%                              recording Notion's last_edited_time at last sync.
+%%   notion-deleted: true     : frontmatter flag marking a soft-deleted row.
+%%   linked to Notion         : local file has a `notion-id` in frontmatter.
+%%   AGENTS.md                : generated downstream-agent guide; never a Notion row.
+%%
+%% ─── LOUD failure semantics (used at n34c, n34e, n34g) ───────────────────────
+%%   1. write a structured failure line to stderr (file path + reason + fix)
+%%   2. append entry to JSON `failed[]` (see schema below)
+%%   3. continue the row queue — do NOT abort the run
+%%   Run-level exit code: 0 if status==clean ; 1 if status==partial or halted.
+%%
+%% ─── Run summary JSON schema (emitted at n41) ────────────────────────────────
+%%   {
+%%     "status":             "clean" | "partial" | "halted",
+%%     "pushed":             [{"file": "...", "fields": ["title", ...]}],
+%%     "skippedNoOp":        ["..."],
+%%     "skippedNonRow":      [{"file": "...", "reason": "AGENTS.md" | "notion-deleted"}],
+%%     "failed":             [{"file": "...", "reason": "...", "fix": "..."}],
+%%     "haltedInValidation": [{"file": "...", "reason": "...", "fix": "..."}]
+%%   }
 flowchart LR
     subgraph Call[1\. User call]
         direction LR
         n11([1.1 — User runs push]) --> n12[1.2 — Find which Notion database<br/>this folder syncs with]
-        n12 --> n13{1.3 — Are local edits<br/>saved/committed first?}
+        n12 --> n13{1.3 — Are local edits<br/>saved to disk?}
         n13 -->|no| n13a[1.3a — Stop — save your<br/>local edits first]
         n13 -->|yes| n14[1.4 — Make a list of local<br/>files to push]
     end
@@ -15,9 +38,9 @@ flowchart LR
         direction LR
         n21{2.1 — Classify each file}
         n21 -->|AGENTS.md| n21a[2.1a — Skip — generated guide,<br/>not a synced row]
-        n21 -->|marked deleted| n21b[2.1b — Skip — already deleted]
-        n21 -->|linked to Notion AND<br/>Notion's last-edited time<br/>== our last-sync stamp| n21c[2.1c — Mark ready to push]
-        n21 -->|linked to Notion BUT<br/>Notion's last-edited time<br/>≠ our last-sync stamp| n21d[2.1d — HALT — conflict<br/>Notion's row has changed<br/>since we last synced]
+        n21 -->|notion-deleted: true| n21b[2.1b — Skip — already soft-deleted]
+        n21 -->|linked to Notion AND<br/>Notion last_edited_time<br/>== local notion-last-edited| n21c[2.1c — Mark ready to push]
+        n21 -->|linked to Notion BUT<br/>Notion last_edited_time<br/>≠ local notion-last-edited| n21d[2.1d — HALT — conflict<br/>Notion's row has changed<br/>since we last synced]
         n21 -->|not linked to Notion<br/>and not AGENTS.md| n21e[2.1e — HALT — unexpected file<br/>doesn't belong in synced folder]
 
         n21c --> n22{2.2 — Any halts<br/>across all files?}
@@ -36,24 +59,40 @@ flowchart LR
         n33 --> n34{3.4 — Notion accepts<br/>the push?}
 
         n34 -->|yes| n34d{3.4d — Verify pushed fields<br/>were stored correctly<br/>Notion's response value ==<br/>what we sent re-encoded}
-        n34d -->|mismatch on a pushed field| n34e[3.4e — LOUD failure message:<br/>Notion stored value differently<br/>than we sent. Show field name +<br/>sent vs stored. Investigate before<br/>next push.]
+        n34d -->|mismatch on a pushed field| n34e[3.4e — LOUD failure:<br/>Notion stored value differently<br/>than we sent. Show field name +<br/>sent vs stored. Investigate before<br/>next push.]
         n34d -->|all pushed fields match| n35a[3.5a — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
         n35a --> n36a[3.6a — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
 
-        n34 -->|no| n34a[3.4a — First failure detected]
+        n34 -->|no, transient<br/>429 / 5xx / network| n34a[3.4a — Transient failure detected]
+        n34 -->|no, permanent<br/>4xx auth / schema / validation| n34c[3.4c — LOUD failure:<br/>show file path + Notion's error +<br/>what user/agent must fix<br/>before the next push run]
         n34a --> n34b{3.4b — Retry 2 more times<br/>with delays<br/>e.g. 5s then 15s}
-        n34b -->|still failing| n34c[3.4c — LOUD failure message:<br/>show file path + Notion's error +<br/>what user/agent must fix<br/>before the next push run]
+        n34b -->|still failing| n34c
         n34b -->|succeeds on retry| n34f{3.4f — Verify pushed fields<br/>were stored correctly<br/>same check as 3.4d}
-        n34f -->|mismatch on a pushed field| n34g[3.4g — LOUD failure message:<br/>Notion stored value differently<br/>than we sent on retry. Show field +<br/>sent vs stored. Investigate before<br/>next push.]
+        n34f -->|mismatch on a pushed field| n34g[3.4g — LOUD failure:<br/>Notion stored value differently<br/>than we sent on retry. Show field +<br/>sent vs stored. Investigate before<br/>next push.]
         n34f -->|all pushed fields match| n35b[3.5b — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
         n35b --> n36b[3.6b — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
+
+        n32a --> n37{3.7 — More rows<br/>in queue?}
+        n34c --> n37
+        n34e --> n37
+        n34g --> n37
+        n36a --> n37
+        n36b --> n37
+        n37 -->|yes| n31
     end
 
     subgraph Report[4\. Run summary — agent-readable structured output]
         direction LR
-        n41[4.1 — Print structured summary:<br/>• run status: clean / partial / halted<br/>• pushed count<br/>• skipped no-op count<br/>• skipped non-row count AGENTS.md / deleted<br/>• failed count + per-row file path + reason + fix<br/>• halted-in-validation count + per-row file path + reason + fix<br/><br/>Agents parse this to decide next action.]
+        n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted-in-validation.<br/><br/>Agents parse this to decide next action.]
     end
 
-    Call --> Validate
-    Validate --> Push
-    Push --> Report
+    %% ─── Phase handoffs (explicit node-to-node) ─────────────────────────────
+    n14 --> n21
+    n22b --> n31
+    n37 -->|no| n41
+
+    %% ─── Universal report sink (every terminal reaches n41) ─────────────────
+    n13a --> n41
+    n21a --> n41
+    n21b --> n41
+    n22a --> n41
