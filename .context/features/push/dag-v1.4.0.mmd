@@ -1,6 +1,6 @@
-%% Push workflow — v1.4.0 (proposed: cell-level diff + strict validation gate)
+%% Push workflow — v1.4.0 (proposed: cell-level diff + strict validation gate + structured summary)
 %% ELI-PM: ideal flow after the push redesign epic lands.
-%% Three phases — user call (once), validation gate (all files first), push (per row, field-by-field).
+%% Four phases — user call (once), validation gate (all files first), push (per row), run summary.
 %% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
 flowchart LR
     subgraph Call[1\. User call]
@@ -49,5 +49,11 @@ flowchart LR
         n35b --> n36b[3.6b — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
     end
 
+    subgraph Report[4\. Run summary — agent-readable structured output]
+        direction LR
+        n41[4.1 — Print structured summary:<br/>• run status: clean / partial / halted<br/>• pushed count<br/>• skipped no-op count<br/>• skipped non-row count AGENTS.md / deleted<br/>• failed count + per-row file path + reason + fix<br/>• halted-in-validation count + per-row file path + reason + fix<br/><br/>Agents parse this to decide next action.]
+    end
+
     Call --> Validate
     Validate --> Push
+    Push --> Report
