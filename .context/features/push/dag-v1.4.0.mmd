@@ -1,0 +1,43 @@
+%% Push workflow — v1.4.0 (proposed: cell-level diff + strict validation gate)
+%% ELI-PM: ideal flow after the push redesign epic lands.
+%% Three phases — user call (once), validation gate (all files first), push (per row, field-by-field).
+%% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
+flowchart LR
+    subgraph Call[1\. User call]
+        direction LR
+        n11([1.1 — User runs push]) --> n12[1.2 — Find which Notion database<br/>this folder syncs with]
+        n12 --> n13{1.3 — Are local edits<br/>saved/committed first?}
+        n13 -->|no| n13a[1.3a — Stop — save your<br/>local edits first]
+        n13 -->|yes| n14[1.4 — Make a list of local<br/>files to push]
+    end
+
+    subgraph Validate[2\. Validation — classify every file, then gate]
+        direction LR
+        n21{2.1 — Classify each file}
+        n21 -->|AGENTS.md| n21a[2.1a — Skip — generated guide,<br/>not a synced row]
+        n21 -->|marked deleted| n21b[2.1b — Skip — already deleted]
+        n21 -->|linked to Notion AND<br/>Notion's last-edited time<br/>== our last-sync stamp| n21c[2.1c — Mark ready to push]
+        n21 -->|linked to Notion BUT<br/>Notion's last-edited time<br/>≠ our last-sync stamp| n21d[2.1d — HALT — conflict<br/>Notion's row has changed<br/>since we last synced]
+        n21 -->|not linked to Notion<br/>and not AGENTS.md| n21e[2.1e — HALT — unexpected file<br/>doesn't belong in synced folder]
+
+        n21c --> n22{2.2 — Any halts<br/>across all files?}
+        n21d --> n22
+        n21e --> n22
+
+        n22 -->|yes| n22a[2.2a — Stop the entire run.<br/>Show every halt reason.<br/>Nothing pushed to Notion.]
+        n22 -->|no| n22b([2.2b — All files cleared — proceed])
+    end
+
+    subgraph Push[3\. Push — per row, field-by-field]
+        direction LR
+        n31[3.1 — Look at each field:<br/>did the user actually change it?] --> n32{3.2 — Did any<br/>field change?}
+        n32 -->|no| n32a[3.2a — Skip — nothing to push]
+        n32 -->|yes| n33[3.3 — Send ONLY the changed<br/>fields to Notion]
+        n33 --> n34{3.4 — Notion accepts<br/>the push?}
+        n34 -->|no| n34a[3.4a — Record error for this row.<br/>Local file unchanged.<br/>Will retry next run.]
+        n34 -->|yes| n35[3.5 — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
+        n35 --> n36[3.6 — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
+    end
+
+    Call --> Validate
+    Validate --> Push

@@ -1,3 +1,9 @@
+# Legacy issue body — snapshot before reframing
+
+Snapshot of issue #55's body prior to the 2026-05-06 reframe. The current issue body is now just a short epic header pointing at three sub-actions (document the flow, implement cell-level push, verify formatting survives). The detailed workstream / SOT / equality-semantics analysis below is preserved here for reference only.
+
+---
+
 # Epic: Push feature — design re-evaluation
 
 **Status:** scratch / pre-issue
