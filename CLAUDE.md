@@ -64,6 +64,7 @@ Custom skills live in `.claude/skills/`. Invoke with `/skill-name`.
 | `/test-single-datasource-db` | Integration test against the single data source test database |
 | `/test-double-datasource-db` | Integration test against the double data source test database |
 | `/test-standalone-page` | Integration test for standalone page import/refresh/list |
+| `/test-push` | E2E test for the push command's full contract — gate, halts, cell-level, summary (grows with v1.4.0 epic) |
 | `/release` | Tag and publish a new release interactively |
 | `/clean` | Clean up merged branches |
 
