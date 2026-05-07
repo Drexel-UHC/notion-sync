@@ -847,6 +847,70 @@ func TestBuildPushQueue_ErrorsWhenMetadataMissing(t *testing.T) {
 	}
 }
 
+// Parity contract: the gate's preview must equal the action. BuildPushQueue
+// (preview) and PushDatabase (action) both call scanPushable, so this test
+// pins the invariant — if anyone re-introduces a divergent filter, this
+// fails.
+func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Mix of pushable + every kind of non-pushable file the filter should
+	// exclude. If the two code paths disagree on any of these, the gate is
+	// a lie.
+	files := map[string]string{
+		"keep-001.md":      "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
+		"keep-002.md":      "---\nnotion-id: page-002\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
+		"AGENTS.md":        "# Guide for downstream agents\n",
+		"no-notion-id.md":  "---\ntitle: stray\n---\n",
+		"deleted.md":       "---\nnotion-id: page-deleted\nnotion-deleted: true\n---\n",
+		"not-markdown.txt": "ignored",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("BuildPushQueue: %v", err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Name": {Type: "title"},
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+	client.pages["page-002"] = &notion.Page{ID: "page-002", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, DryRun: true}, nil)
+	if err != nil {
+		t.Fatalf("PushDatabase: %v", err)
+	}
+
+	if result.Total != len(queue) {
+		t.Fatalf("preview/action divergence: BuildPushQueue=%d PushDatabase.Total=%d", len(queue), result.Total)
+	}
+	queueBasenames := make(map[string]bool, len(queue))
+	for _, p := range queue {
+		queueBasenames[filepath.Base(p)] = true
+	}
+	for _, want := range []string{"keep-001.md", "keep-002.md"} {
+		if !queueBasenames[want] {
+			t.Errorf("queue missing %s; got %v", want, queue)
+		}
+	}
+	for _, exclude := range []string{"AGENTS.md", "no-notion-id.md", "deleted.md", "not-markdown.txt"} {
+		if queueBasenames[exclude] {
+			t.Errorf("queue should not include %s; got %v", exclude, queue)
+		}
+	}
+}
+
 // writeDatabaseMeta writes a minimal _database.json for tests.
 func writeDatabaseMeta(t *testing.T, dir, dbID string) {
 	t.Helper()

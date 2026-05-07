@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/ran-codes/notion-sync/internal/clean"
 	"github.com/ran-codes/notion-sync/internal/config"
 	"github.com/ran-codes/notion-sync/internal/notion"
@@ -460,13 +462,11 @@ func confirmPush(queue []string, yes, isTTY bool, stdin io.Reader, stderr io.Wri
 }
 
 // isStdinTTY reports whether stdin is connected to a terminal (vs a pipe or
-// redirect). Stdlib-only check that works on Windows and Unix.
+// redirect). Uses x/term so mintty-based shells (Git Bash, MSYS2, Cygwin)
+// are detected correctly — the stdlib `os.ModeCharDevice` check misses them
+// because mintty wraps stdio in named pipes.
 func isStdinTTY() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func runPush(args []string) error {
