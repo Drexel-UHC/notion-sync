@@ -84,8 +84,11 @@ Commands:
   push      Push local frontmatter property changes back to Notion (properties only, no body)
             Previews the push queue and prompts y/N before any API write (TTY only).
             Non-interactive runs (CI / pipes) must pass --yes; otherwise the run is cancelled.
-            Refuses to push files where Notion has been edited since last sync, unless --force.
-            --force, -f    Push even if Notion has newer edits (overwrites Notion-side changes)
+            Runs a validation gate before any write: stray .md, malformed YAML, conflicting
+            timestamps, or unreachable rows halt the entire run (all-or-nothing).
+            --force, -f    Skip the validation gate entirely. Pushes despite conflicts,
+                           strays, malformed YAML, unreadable files, or unreachable rows.
+                           Use only after manual review — overwrites Notion-side changes.
             --dry-run      Show what would be pushed without writing to Notion (still reads from Notion for conflict detection)
             --yes, -y      Skip the confirmation prompt (required in non-interactive runs)
   list      List all synced databases and pages in a folder
@@ -489,8 +492,8 @@ func isStdinTTY() bool {
 func runPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	apiKey := fs.String("api-key", "", "Notion API key")
-	force := fs.Bool("force", false, "Push even if Notion has newer edits")
-	forceShort := fs.Bool("f", false, "Push even if Notion has newer edits (shorthand)")
+	force := fs.Bool("force", false, "Skip the validation gate entirely (bypasses conflicts, strays, malformed YAML, and unreachable rows)")
+	forceShort := fs.Bool("f", false, "Skip the validation gate entirely (shorthand)")
 	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing to Notion")
 	yes := fs.Bool("yes", false, "Skip the confirmation prompt (required for non-interactive runs)")
 	yesShort := fs.Bool("y", false, "Skip the confirmation prompt (shorthand)")
@@ -632,6 +635,8 @@ func haltClassLabel(c sync.Classification) string {
 		return "unreachable"
 	case sync.ClassHaltMalformed:
 		return "malformed"
+	case sync.ClassHaltUnreadable:
+		return "unreadable"
 	default:
 		return "halt"
 	}

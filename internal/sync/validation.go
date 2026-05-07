@@ -21,14 +21,16 @@ const (
 	ClassHaltUnexpected                        // n21e — unlinked, not AGENTS.md
 	ClassHaltUnreachable                       // n21f — Notion unreachable during read
 	ClassHaltMalformed                         // n21g — YAML frontmatter could not be parsed
+	ClassHaltUnreadable                        // n21h — file could not be read from disk
 )
 
-// IsHalt returns true for the four halt-class values.
+// IsHalt returns true for any halt-class value.
 func (c Classification) IsHalt() bool {
 	return c == ClassHaltConflict ||
 		c == ClassHaltUnexpected ||
 		c == ClassHaltUnreachable ||
-		c == ClassHaltMalformed
+		c == ClassHaltMalformed ||
+		c == ClassHaltUnreadable
 }
 
 // FileClassification is one file's row in the validation report.
@@ -97,7 +99,16 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+			// IO errors (permission denied, transient FS hiccup) classify as
+			// halt rather than abort the whole pass — surfaces the file in
+			// the halt list with a fixable reason instead of dropping the
+			// entire validation report on the floor.
+			add(FileClassification{
+				Path:   fullPath,
+				Class:  ClassHaltUnreadable,
+				Reason: fmt.Sprintf("could not read file: %v", err),
+			})
+			continue
 		}
 		fm, parseErr := frontmatter.Parse(string(content))
 		if parseErr != nil {
@@ -192,7 +203,12 @@ func scanLocalHalts(folderPath string) ([]FileClassification, error) {
 		fullPath := filepath.Join(folderPath, entry.Name())
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+			halts = append(halts, FileClassification{
+				Path:   fullPath,
+				Class:  ClassHaltUnreadable,
+				Reason: fmt.Sprintf("could not read file: %v", err),
+			})
+			continue
 		}
 		fm, parseErr := frontmatter.Parse(string(content))
 		if parseErr != nil {

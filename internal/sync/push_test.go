@@ -1104,6 +1104,57 @@ func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 	}
 }
 
+// --force bypasses the entire validation gate, not just conflict detection.
+// A folder containing every halt class (stray, malformed YAML, conflict)
+// alongside a clean row must still push the linked rows under --force, with
+// Halted=false and zero entries in result.Halts. Pins the expanded escape-
+// hatch semantics so a future tightening (e.g. "force only bypasses
+// conflicts") can't silently break callers who rely on yolo mode.
+func TestPushDatabase_ForceBypassesAllHaltClasses(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"ready.md":     "---\nnotion-id: page-ready\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"conflict.md":  "---\nnotion-id: page-conflict\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
+		"stray.md":     "---\ntitle: stray\n---\n",
+		"malformed.md": "---\nnotion-id: \"unclosed\nStatus: Done\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-ready"] = &notion.Page{ID: "page-ready", LastEditedTime: "2024-01-01T00:00:00Z"}
+	// Notion's timestamp is newer — would be n21d under the gate, force must override.
+	client.pages["page-conflict"] = &notion.Page{ID: "page-conflict", LastEditedTime: "2024-06-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, Force: true}, nil)
+	if err != nil {
+		t.Fatalf("force push must not error on halt-class fixtures: %v", err)
+	}
+	if result.Halted {
+		t.Error("--force must skip the validation gate (Halted=false)")
+	}
+	if len(result.Halts) != 0 {
+		t.Errorf("--force must produce no Halts entries, got %v", result.Halts)
+	}
+	// Both linked rows push; stray and malformed are filtered by scanPushable
+	// (no notion-id / unparseable), not by the gate.
+	if len(client.updateRequests) != 2 {
+		t.Errorf("expected 2 UpdatePage calls under --force (ready + conflict), got %d", len(client.updateRequests))
+	}
+	if result.Pushed != 2 {
+		t.Errorf("expected Pushed=2 under --force, got %d", result.Pushed)
+	}
+}
+
 // writeDatabaseMeta writes a minimal _database.json for tests.
 func writeDatabaseMeta(t *testing.T, dir, dbID string) {
 	t.Helper()

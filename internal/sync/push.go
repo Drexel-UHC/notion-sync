@@ -35,7 +35,11 @@ func scanPushable(folderPath string) ([]pushableFile, error) {
 		filePath := filepath.Join(folderPath, entry.Name())
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			continue
+			// Read failures bubble up — the gate classifies them as
+			// ClassHaltUnreadable, but under --force the gate is skipped, so
+			// silently dropping the file would leave the user unaware their
+			// .md was excluded. Loud > silent.
+			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
 		}
 		fm, err := frontmatter.Parse(string(content))
 		if err != nil || fm == nil {

@@ -351,6 +351,49 @@ func TestValidate_n21g_MalformedYAMLClassifiedAsHaltMalformed(t *testing.T) {
 	}
 }
 
+// n21h — file present on disk but unreadable (permission denied, transient
+// FS issue). Validation must classify as halt rather than abort the whole
+// pass: surfaces the file in the halt list with a fixable reason instead of
+// dropping the entire validation report.
+func TestValidate_n21h_UnreadableFileClassifiedAsHaltUnreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file-mode permissions; skipping unreadable-file test")
+	}
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// chmod 0000 — even the owner can't read it. On Windows this is a no-op
+	// (file permissions don't work the same way), so the test is effectively
+	// a Unix-only guard. The classification path is identical for any IO error.
+	unreadable := filepath.Join(dir, "locked.md")
+	if err := os.WriteFile(unreadable, []byte("---\nnotion-id: x\n---\n"), 0000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(unreadable, 0644) // ensure t.TempDir cleanup can remove it
+	if _, err := os.ReadFile(unreadable); err == nil {
+		t.Skip("filesystem allows reading 0000-mode file (likely Windows or root); skipping")
+	}
+
+	client := newMockClient()
+	report, err := ValidatePushQueue(client, dir)
+	if err != nil {
+		t.Fatalf("unreadable file must surface via classification, not err: %v", err)
+	}
+	if len(report.Files) != 1 {
+		t.Fatalf("expected 1 classified file, got %d", len(report.Files))
+	}
+	got := report.Files[0]
+	if got.Class != ClassHaltUnreadable {
+		t.Errorf("expected ClassHaltUnreadable, got %v", got.Class)
+	}
+	if got.Reason == "" {
+		t.Error("unreadable halt must populate Reason")
+	}
+	if !report.Halted {
+		t.Error("an unreadable file must flip Halted=true")
+	}
+}
+
 // Defensive case-insensitive AGENTS.md match: on Windows / default-config
 // macOS the file may land as agents.md or Agents.md. Misclassifying it as
 // a stray would halt the run for filesystem casing alone.
