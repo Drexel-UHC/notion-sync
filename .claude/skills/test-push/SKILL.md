@@ -200,7 +200,21 @@ Steps `S1`...`Sn`. Expected coverage:
 
 ### Step F1: Final state verification
 
-Notion MCP fetch of the canary page. Every snapshotted property must match the **Step 3 originals**. If anything drifted, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
+Notion MCP fetch of the canary page. Compare against **the canonical Step 3 table values hardcoded in this skill** — NOT just the run's own Step 3 fetch. Within-run-only comparison is unsafe: if a prior run left the fixture drifted, a fresh Step 3 fetch records the drifted state and F1 then "matches" itself, silently passing while the bug persists. F1's job is to detect drift against the source-of-truth canonical, full stop.
+
+For each canonical property in the Step 3 table:
+
+| Property | Canonical value | Notion shape to assert |
+|---|---|---|
+| `Name` | `Push: Canary` | `title` text == canonical |
+| `Description` | `Phase 1 fixture — confirmation gate cancel/proceed/dry-run.` | `rich_text` plain text == canonical |
+| `Category` | `Research` | `select.name` == canonical |
+| `Score` | `100` | `number` == canonical |
+| `Due Date` | `2026-06-01` (date-only) | `date.start` == canonical AND `is_datetime` == `0`/`false` |
+
+If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
+
+**Note on `Due Date`:** the `is_datetime` flag is load-bearing here. A common bug class is push promoting date-only properties to UTC datetimes (the original parser-roundtrip bug). F1 must assert *both* `start` matches AND `is_datetime` is false; matching only on the calendar day misses the type drift.
 
 ### Step F2: Cleanup
 
