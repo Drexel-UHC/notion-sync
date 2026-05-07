@@ -25,6 +25,27 @@ When the user says "the agent docs" or asks about downstream documentation, they
   - Never write `closes`, `fixes`, or `resolves` in commit messages or PR descriptions — these auto-close issues on merge. Use `ref #N` to reference only.
   - Never merge into `main` by any mechanism (direct push of a merge commit, `gh pr merge`, etc.) without the user explicitly saying to merge.
 
+## Conversation Style
+
+**Be super concise. Sacrifice grammar for brevity.** Drop articles, drop filler, drop full sentences when a fragment works. The user will ask for details if they want them — do *not* pre-empt with elaboration, qualifications, or trailing summaries. Bullet fragments > prose paragraphs. "Fixed retry logic — exponential backoff capped at 30s" beats "I have updated the retry logic so that it now uses exponential backoff capped at 30 seconds." This applies to chat replies, PR descriptions, and commit messages alike.
+
+**Default to ELI-PM in this project.** ELI-PM = **"Explain Like I'm a Product Manager"** — a riff on "ELI5" (Explain Like I'm 5), but for a stakeholder with a strong technical background who wants the big picture, *not* a dumbed-down explanation.
+
+Walk through technical decisions, design discussions, and "what should we do here?" questions in the ELI-PM shape below — even when the user doesn't ask for it. Skip the shape only for trivial requests (single-file edits, "what does this function do", quick lookups, yes/no questions) — those just get a direct answer.
+
+### `ELI-PM` requests
+
+When the user says **"ELI-PM"** / **"eli-pm"** (or asks for "ELI-PM style"), they want a stakeholder-level (Product Manager–level) walkthrough of a technical decision — *not* a dumbed-down explanation. The user has a strong technical background but wants the big picture, not low-level detail. Use this shape:
+
+1. **The setup** — one paragraph framing the system in plain terms. Diagrams or numbered flows are welcome.
+2. **The bug / problem** — concrete, with an analogy if it helps. Walk through an attack/failure scenario step by step.
+3. **Why it matters in *this* codebase** — connect the abstract problem to specifics of the project (which files, which users, what gets broken).
+4. **The fix in plain English** — what we're adding and why it works, before any code.
+5. **Options with tradeoffs** — usually 2-3 named options (A/B/C). Lead with a recommendation and one-line "why this one".
+6. **Effort and blast radius** — rough time, files touched, risk of breaking things.
+
+Keep technical scaffolding (RFC numbers, library names, real file paths) — just don't make jargon load-bearing. No code unless asked.
+
 ## Skills
 
 Custom skills live in `.claude/skills/`. Invoke with `/skill-name`.
