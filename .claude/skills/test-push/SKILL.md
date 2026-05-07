@@ -35,9 +35,9 @@ When adding a phase: append a new `## Phase N — <name>` section with new step 
 
 ## Test database
 
-- **DB ID:** `2fe57008-e885-8003-b1f3-cc05981dc6b0` (the single-data-source test DB)
-- **Notion URL:** https://www.notion.so/2fe57008e8858003b1f3cc05981dc6b0
-- **Schema reference:** `.claude/reference/test-databases/single-data-source/setup.md`
+- **DB ID:** `35957008-e885-80c5-9e34-f4191fd83907` (dedicated push e2e fixture DB — `notion-sync-test-database-push`)
+- **Notion URL:** https://www.notion.so/35957008e88580c59e34f4191fd83907
+- **Schema reference:** `.claude/reference/test-databases/push-e2e/setup.md`
 - **Output folder for this skill:** `test-output/push-e2e/` — distinct from `/test-single-datasource-db`'s folder so the two skills can run side-by-side without collision.
 
 Imported fresh on every run (Step 2). Reverted to original state on every run (final step).
@@ -54,10 +54,10 @@ Check the skill args:
 
 This skill must be **idempotent** — runnable cleanly on a fresh checkout AND immediately after a previous run. Every step that mutates Notion has a corresponding revert step. If a step fails mid-run, the cleanup section's revert + summary will tell you what state needs manual fix-up.
 
-The single-source test DB is shared. Don't leave behind:
-- Locally-edited `.md` files with non-original property values
-- Notion rows with `e2e-push-test-` / `e2e-dryrun-test` content
-- Auto-created `select` options (only use existing options: Research / Engineering / Design / Marketing)
+The push e2e DB is dedicated to this skill, but the `setup.md` "do not edit" conventions still apply across runs and across phases. Don't leave behind:
+- Locally-edited `.md` files with non-original property values (Step 3 documents the originals; F1 verifies them)
+- Notion-side drift on any of the 7 fixtures — especially Page 4's rich-text annotations (the phase-3 regression target; see `setup.md` "Things to NEVER do")
+- Auto-created `select` / `multi_select` options. Use only the spec'd options: Research / Engineering / Design / Marketing for `Category`; alpha / beta / gamma / delta for `Tags`.
 
 ---
 
@@ -128,7 +128,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - Combined output contains `Proceeding (--yes).`
   - `Pushed >= 1`, `Pushed + Skipped == Total`
   - No `Conflicts:` or `Failed:` lines
-  - Page B's local `.md` now has `notion-last-pushed:`
+  - The canary page's local `.md` now has `notion-last-pushed:`
   - **Notion MCP fetch** of the canary page: `Score` is now `9999`.
 
 ### Step G3: Revert via push (`--yes`)
