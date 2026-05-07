@@ -98,6 +98,20 @@ Use Notion MCP `notion-fetch` to snapshot its property values — needed for neg
 
 Record the page `notion-id` and the 5 values in the run notes.
 
+### Step 4: Isolate canary for phase 1 (delete Pages 2-7 from local folder)
+
+The push command iterates **every** `.md` file in the folder and sends each one's full property payload to Notion. Until phase 3 (cell-level diff) lands, this means a single `push --yes` against the full folder strips Page 4's rich-text annotations on Notion — silently corrupting the phase-3 fixture.
+
+**Phase 1 only needs Page 1.** Delete the other six pages' `.md` files so the push queue contains exactly the canary:
+
+- Keep: `Push- Canary.md` (the `:` in `Push: Canary` is sanitized to `-` on import)
+- Delete: every other `.md` file in `./test-output/push-e2e/notion-sync-test-database-push/`
+- Don't touch: `_database.json`, `AGENTS.md`
+
+Verify: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run` should show `Push queue (1 file)` listing only the canary.
+
+When phase 3 lands and cell-level diff is in place, this step becomes optional — until then it's the cheapest way to keep the phase-3 fixture intact across phase-1 runs.
+
 ---
 
 ## Phase 1 — Confirmation gate (DAG n12b → n13 → n13a)
@@ -210,6 +224,7 @@ Print a summary table:
 | 1    | Clean slate                             | PASS   |
 | 2    | Fresh import                            | PASS   |
 | 3    | Snapshot the canary page                | PASS   |
+| 4    | Isolate canary (delete Pages 2-7 .md)   | PASS   |
 | G1   | Cancel without --yes (no Notion write)  | PASS   |
 | G2   | --yes proceeds, Notion updated          | PASS   |
 | G3   | Revert via push --yes                   | PASS   |
