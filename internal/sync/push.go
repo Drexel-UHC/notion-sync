@@ -52,11 +52,17 @@ func scanPushable(folderPath string) ([]pushableFile, error) {
 	return files, nil
 }
 
-// BuildPushQueue returns the .md file paths in folderPath that PushDatabase
-// would attempt to push. Used by the confirmation gate (DAG n12b) before any
-// Notion API call. Errors if folderPath isn't a synced database so the user
-// sees "not a sync folder" rather than a misleading "nothing to push".
-func BuildPushQueue(folderPath string) ([]string, error) {
+// BuildPushQueue returns the phase-1 confirmation preview: the .md files
+// PushDatabase would attempt to push, plus any halts detectable from disk
+// alone (stray .md, malformed YAML). Used by the confirmation gate (DAG
+// n12b) before any Notion API call.
+//
+// Errors if folderPath isn't a synced database so the user sees "not a
+// sync folder" rather than a misleading "nothing to push". Surfacing
+// LocalHalts here keeps the preview honest with the validation gate: if
+// strays exist, the user sees them at consent time instead of confirming
+// a queue and then getting halted on a file they were never shown.
+func BuildPushQueue(folderPath string) (*PushPreview, error) {
 	metadata, err := ReadDatabaseMetadata(folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("read metadata: %w", err)
@@ -72,7 +78,11 @@ func BuildPushQueue(folderPath string) ([]string, error) {
 	for _, f := range files {
 		queue = append(queue, f.path)
 	}
-	return queue, nil
+	localHalts, err := scanLocalHalts(folderPath)
+	if err != nil {
+		return nil, err
+	}
+	return &PushPreview{Queue: queue, LocalHalts: localHalts}, nil
 }
 
 // PushDatabase pushes local frontmatter property changes back to Notion.
@@ -131,6 +141,10 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 				}
 			}
 			result.Halted = true
+			// Total reflects everything classified, not just halts — gives
+			// the CLI summary "halted: 3 of 9 inspected" instead of the
+			// useless "Total: 0".
+			result.Total = len(report.Files)
 			if onProgress != nil {
 				onProgress(ProgressPhase{Phase: PhaseComplete})
 			}
@@ -153,7 +167,11 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		notionID := f.fm["notion-id"].(string)
 		localLastEdited, _ := f.fm["notion-last-edited"].(string)
 
-		// Conflict check: compare local last-edited timestamp with Notion's current value.
+		// TOCTOU defense: the validation gate already covered the !Force
+		// common case, but Notion could be edited in the window between
+		// the gate's GetPage and this one. The gate makes per-row halts
+		// nearly impossible in practice; this catches the rare race so
+		// we never overwrite a freshly-edited row.
 		var notionPage *notion.Page
 		if !opts.Force {
 			page, err := opts.Client.GetPage(notionID)

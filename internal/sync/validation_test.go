@@ -3,6 +3,7 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ran-codes/notion-sync/internal/notion"
@@ -306,8 +307,73 @@ func TestValidate_n22b_NoHaltsMakesReportNotHalted(t *testing.T) {
 		t.Errorf("expected 4 classifications, got %d", len(report.Files))
 	}
 	for _, f := range report.Files {
-		if f.Class == ClassHaltConflict || f.Class == ClassHaltUnexpected || f.Class == ClassHaltUnreachable {
+		if f.Class.IsHalt() {
 			t.Errorf("%s: unexpected halt class %v", f.Path, f.Class)
 		}
+	}
+}
+
+// n21g — corrupt YAML frontmatter is a halt (not silent skip): the user
+// almost certainly has a hand-edit they need to fix, and pushing past it
+// would bypass property changes they intended. Reason must explicitly
+// mention YAML so the user isn't sent hunting for a stray file.
+func TestValidate_n21g_MalformedYAMLClassifiedAsHaltMalformed(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Unclosed quoted string — yaml.Unmarshal errors out.
+	bad := "---\nnotion-id: \"unclosed\nStatus: Done\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), []byte(bad), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	report, err := ValidatePushQueue(client, dir)
+	if err != nil {
+		t.Fatalf("malformed YAML must surface via classification, not err: %v", err)
+	}
+
+	if len(report.Files) != 1 {
+		t.Fatalf("expected 1 classified file, got %d", len(report.Files))
+	}
+	got := report.Files[0]
+	if got.Class != ClassHaltMalformed {
+		t.Errorf("expected ClassHaltMalformed, got %v", got.Class)
+	}
+	if got.Reason == "" {
+		t.Error("malformed halt must populate Reason")
+	}
+	if !strings.Contains(strings.ToLower(got.Reason), "yaml") {
+		t.Errorf("reason must mention YAML so user knows to fix frontmatter, got %q", got.Reason)
+	}
+	if !report.Halted {
+		t.Error("malformed YAML must flip Halted=true")
+	}
+}
+
+// Defensive case-insensitive AGENTS.md match: on Windows / default-config
+// macOS the file may land as agents.md or Agents.md. Misclassifying it as
+// a stray would halt the run for filesystem casing alone.
+func TestValidate_n21a_AgentsMDMatchIsCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	if err := os.WriteFile(filepath.Join(dir, "agents.md"), []byte("# guide\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	report, err := ValidatePushQueue(client, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(report.Files) != 1 {
+		t.Fatalf("expected 1 classified file, got %d", len(report.Files))
+	}
+	if report.Files[0].Class != ClassSkipAgentsMD {
+		t.Errorf("agents.md (lowercase) must classify as ClassSkipAgentsMD, got %v", report.Files[0].Class)
+	}
+	if report.Halted {
+		t.Error("lowercased agents.md must not halt the run")
 	}
 }

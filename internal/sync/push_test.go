@@ -896,20 +896,26 @@ func TestBuildPushQueue_IncludesLinkedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 1 {
-		t.Fatalf("expected 1 file, got %d (%v)", len(queue), queue)
+	if len(preview.Queue) != 1 {
+		t.Fatalf("expected 1 file, got %d (%v)", len(preview.Queue), preview.Queue)
 	}
-	if filepath.Base(queue[0]) != "page-001.md" {
-		t.Errorf("expected page-001.md, got %s", queue[0])
+	if filepath.Base(preview.Queue[0]) != "page-001.md" {
+		t.Errorf("expected page-001.md, got %s", preview.Queue[0])
+	}
+	if len(preview.LocalHalts) != 0 {
+		t.Errorf("expected no local halts on a clean queue, got %v", preview.LocalHalts)
 	}
 }
 
-// AGENTS.md (no notion-id) and arbitrary unlinked files must be excluded —
-// the queue is "rows we'd push to Notion," and these aren't rows.
+// AGENTS.md (no notion-id) is excluded from the queue and silently. A
+// stray .md without notion-id is also excluded from the queue but surfaces
+// in LocalHalts so the confirmation prompt can warn the user before they
+// consent — otherwise the validation gate would halt on a file the user
+// was never shown (fix-loop UX).
 func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")
@@ -921,12 +927,58 @@ func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Errorf("expected empty queue, got %v", queue)
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected empty queue, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 1 {
+		t.Fatalf("expected stray.md to surface as a local halt, got %v", preview.LocalHalts)
+	}
+	got := preview.LocalHalts[0]
+	if filepath.Base(got.Path) != "stray.md" {
+		t.Errorf("expected stray.md in local halts, got %s", got.Path)
+	}
+	if got.Class != ClassHaltUnexpected {
+		t.Errorf("expected ClassHaltUnexpected, got %v", got.Class)
+	}
+	if got.Reason == "" {
+		t.Error("local halts must populate Reason for the user")
+	}
+}
+
+// Malformed YAML is a locally-detectable halt — surfaces in LocalHalts so
+// the confirmation prompt warns before the validation gate halts on it.
+// Reason must mention YAML parsing, not "no notion-id" (that would send
+// the user hunting for a stray file when the issue is corrupt frontmatter).
+func TestBuildPushQueue_MalformedYAMLSurfacesAsLocalHalt(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Unclosed quote → yaml.Unmarshal returns an error.
+	bad := "---\nnotion-id: \"unclosed\nStatus: Done\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), []byte(bad), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected empty queue, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 1 {
+		t.Fatalf("expected 1 local halt for malformed YAML, got %v", preview.LocalHalts)
+	}
+	got := preview.LocalHalts[0]
+	if got.Class != ClassHaltMalformed {
+		t.Errorf("expected ClassHaltMalformed, got %v", got.Class)
+	}
+	if !strings.Contains(got.Reason, "YAML") && !strings.Contains(got.Reason, "yaml") {
+		t.Errorf("expected reason to mention YAML, got %q", got.Reason)
 	}
 }
 
@@ -939,12 +991,15 @@ func TestBuildPushQueue_SkipsDeletedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Errorf("expected deleted entry to be skipped, got %v", queue)
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected deleted entry to be skipped, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 0 {
+		t.Errorf("deleted entries are not halts, got %v", preview.LocalHalts)
 	}
 }
 
@@ -965,25 +1020,24 @@ func TestBuildPushQueue_ErrorsWhenMetadataMissing(t *testing.T) {
 	}
 }
 
-// Parity contract: the gate's preview must equal the action. BuildPushQueue
-// (preview) and PushDatabase (action) both call scanPushable, so this test
-// pins the invariant — if anyone re-introduces a divergent filter, this
-// fails. Note: the unexpected-stray case (n21e) is excluded here because
-// phase 2's validation gate now halts on it before the per-row loop runs;
-// see TestPushDatabase_ValidationHaltAbortsRun_NoUpdatePageCalls for that
-// contract. This test still pins parity over the AGENTS.md / deleted /
-// non-markdown skip cases.
+// Parity contract: the preview must agree with the action. BuildPushQueue
+// (preview) and PushDatabase (action) both call scanPushable for the queue,
+// and BuildPushQueue.LocalHalts uses the same notion-id rule the validation
+// gate uses for ClassHaltUnexpected — so a stray file that halts the run
+// is the same stray file the user saw at confirmation time. This test
+// pins both invariants: queue parity over skip cases, halt parity over
+// stray cases.
 func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")
 
 	// Mix of pushable + every kind of non-pushable file the filter should
-	// exclude. If the two code paths disagree on any of these, the gate is
-	// a lie.
+	// exclude, plus a stray that the gate will halt on.
 	files := map[string]string{
 		"keep-001.md":      "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
 		"keep-002.md":      "---\nnotion-id: page-002\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
 		"AGENTS.md":        "# Guide for downstream agents\n",
+		"stray.md":         "---\ntitle: stray\n---\n",
 		"deleted.md":       "---\nnotion-id: page-deleted\nnotion-deleted: true\n---\n",
 		"not-markdown.txt": "ignored",
 	}
@@ -993,7 +1047,7 @@ func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 		}
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("BuildPushQueue: %v", err)
 	}
@@ -1013,21 +1067,39 @@ func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 		t.Fatalf("PushDatabase: %v", err)
 	}
 
-	if result.Total != len(queue) {
-		t.Fatalf("preview/action divergence: BuildPushQueue=%d PushDatabase.Total=%d", len(queue), result.Total)
+	// Action halts on stray.md; preview must surface it too.
+	if !result.Halted {
+		t.Fatalf("expected validation to halt on stray.md")
 	}
-	queueBasenames := make(map[string]bool, len(queue))
-	for _, p := range queue {
+	if len(preview.LocalHalts) != 1 || filepath.Base(preview.LocalHalts[0].Path) != "stray.md" {
+		t.Errorf("preview must surface stray.md as a local halt, got %v", preview.LocalHalts)
+	}
+	// Halt-class parity: every local halt must show up as a halt in the
+	// gate's report (the action). If the preview warns about a stray and
+	// the gate doesn't halt on it, the warning is a lie.
+	gateHaltPaths := map[string]bool{}
+	for _, h := range result.Halts {
+		gateHaltPaths[filepath.Base(h.Path)] = true
+	}
+	for _, h := range preview.LocalHalts {
+		if !gateHaltPaths[filepath.Base(h.Path)] {
+			t.Errorf("preview/gate divergence: %s in LocalHalts but not in PushResult.Halts", filepath.Base(h.Path))
+		}
+	}
+
+	// Queue parity over the non-halt cases.
+	queueBasenames := make(map[string]bool, len(preview.Queue))
+	for _, p := range preview.Queue {
 		queueBasenames[filepath.Base(p)] = true
 	}
 	for _, want := range []string{"keep-001.md", "keep-002.md"} {
 		if !queueBasenames[want] {
-			t.Errorf("queue missing %s; got %v", want, queue)
+			t.Errorf("queue missing %s; got %v", want, preview.Queue)
 		}
 	}
-	for _, exclude := range []string{"AGENTS.md", "deleted.md", "not-markdown.txt"} {
+	for _, exclude := range []string{"AGENTS.md", "stray.md", "deleted.md", "not-markdown.txt"} {
 		if queueBasenames[exclude] {
-			t.Errorf("queue should not include %s; got %v", exclude, queue)
+			t.Errorf("queue should not include %s; got %v", exclude, preview.Queue)
 		}
 	}
 }

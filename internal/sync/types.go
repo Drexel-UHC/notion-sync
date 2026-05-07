@@ -76,6 +76,16 @@ type PushOptions struct {
 	DryRun     bool // report planned changes without writing
 }
 
+// PushPreview is what the phase-1 confirmation gate displays to the user
+// before any Notion write. Queue is the .md paths that would be pushed if
+// validation passes; LocalHalts enumerates halts detectable without a
+// Notion API call (stray .md, malformed YAML). Network-dependent halts
+// (conflicts, unreachable) only surface later at the validation gate.
+type PushPreview struct {
+	Queue      []string
+	LocalHalts []FileClassification
+}
+
 // PushResult contains the result of a push operation.
 type PushResult struct {
 	Title         string

@@ -8,7 +8,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ran-codes/notion-sync/internal/sync"
 )
+
+// previewOf wraps a queue (and optional local halts) into the *PushPreview
+// shape confirmPush now takes. Keeps the tests below readable.
+func previewOf(queue []string, halts ...sync.FileClassification) *sync.PushPreview {
+	return &sync.PushPreview{Queue: queue, LocalHalts: halts}
+}
 
 func TestReorderArgs_FlagsBeforePositional(t *testing.T) {
 	tests := []struct {
@@ -121,7 +129,7 @@ func TestCLI_AgentsMD_OverwritesExisting(t *testing.T) {
 
 func TestConfirmPush_YesFlag_Proceeds(t *testing.T) {
 	var stderr bytes.Buffer
-	ok := confirmPush([]string{"a/page.md"}, true, false, strings.NewReader(""), &stderr)
+	ok := confirmPush(previewOf([]string{"a/page.md"}), true, false, strings.NewReader(""), &stderr)
 	if !ok {
 		t.Error("expected confirmPush to return true with --yes flag")
 	}
@@ -135,7 +143,7 @@ func TestConfirmPush_YesFlag_Proceeds(t *testing.T) {
 // user/agent knows how to opt in.
 func TestConfirmPush_NonTTY_NoFlag_Cancels(t *testing.T) {
 	var stderr bytes.Buffer
-	ok := confirmPush([]string{"a/page.md"}, false, false, strings.NewReader(""), &stderr)
+	ok := confirmPush(previewOf([]string{"a/page.md"}), false, false, strings.NewReader(""), &stderr)
 	if ok {
 		t.Error("expected confirmPush to cancel in non-TTY without --yes")
 	}
@@ -151,7 +159,7 @@ func TestConfirmPush_NonTTY_NoFlag_Cancels(t *testing.T) {
 func TestConfirmPush_TTY_Yes_Proceeds(t *testing.T) {
 	for _, ans := range []string{"y\n", "Y\n", "yes\n", "YES\n"} {
 		var stderr bytes.Buffer
-		ok := confirmPush([]string{"a/page.md"}, false, true, strings.NewReader(ans), &stderr)
+		ok := confirmPush(previewOf([]string{"a/page.md"}), false, true, strings.NewReader(ans), &stderr)
 		if !ok {
 			t.Errorf("answer %q: expected proceed, got cancel\nstderr: %s", ans, stderr.String())
 		}
@@ -163,7 +171,7 @@ func TestConfirmPush_TTY_Yes_Proceeds(t *testing.T) {
 func TestConfirmPush_TTY_DefaultN_Cancels(t *testing.T) {
 	for _, ans := range []string{"\n", "n\n", "N\n", "no\n", "maybe\n", ""} {
 		var stderr bytes.Buffer
-		ok := confirmPush([]string{"a/page.md"}, false, true, strings.NewReader(ans), &stderr)
+		ok := confirmPush(previewOf([]string{"a/page.md"}), false, true, strings.NewReader(ans), &stderr)
 		if ok {
 			t.Errorf("answer %q: expected cancel, got proceed", ans)
 		}
@@ -182,7 +190,7 @@ func TestConfirmPush_Preview_ListsFilesAndCount(t *testing.T) {
 		"notion/db/page-003.md",
 	}
 	var stderr bytes.Buffer
-	confirmPush(queue, true, false, strings.NewReader(""), &stderr)
+	confirmPush(previewOf(queue), true, false, strings.NewReader(""), &stderr)
 
 	out := stderr.String()
 	if !strings.Contains(out, "3 files") {
@@ -199,9 +207,34 @@ func TestConfirmPush_Preview_ListsFilesAndCount(t *testing.T) {
 // Singular noun for one file — small UX detail but worth pinning.
 func TestConfirmPush_Preview_SingularForOneFile(t *testing.T) {
 	var stderr bytes.Buffer
-	confirmPush([]string{"only.md"}, true, false, strings.NewReader(""), &stderr)
+	confirmPush(previewOf([]string{"only.md"}), true, false, strings.NewReader(""), &stderr)
 	if !strings.Contains(stderr.String(), "1 file)") {
 		t.Errorf("expected '1 file)' (singular), got:\n%s", stderr.String())
+	}
+}
+
+// Local halts (stray .md, malformed YAML) must surface in the confirmation
+// preview — otherwise the user confirms a queue and gets halted on a file
+// they were never shown. The DAG calls this the fix-once-rerun-once UX.
+func TestConfirmPush_Preview_ListsLocalHaltsBeforePrompt(t *testing.T) {
+	preview := &sync.PushPreview{
+		Queue: []string{"notion/db/page-001.md"},
+		LocalHalts: []sync.FileClassification{
+			{Path: "notion/db/stray.md", Class: sync.ClassHaltUnexpected, Reason: "no notion-id"},
+			{Path: "notion/db/broken.md", Class: sync.ClassHaltMalformed, Reason: "could not parse YAML"},
+		},
+	}
+	var stderr bytes.Buffer
+	confirmPush(preview, true, false, strings.NewReader(""), &stderr)
+
+	out := stderr.String()
+	if !strings.Contains(out, "Will halt") {
+		t.Errorf("expected halt warning in preview, got:\n%s", out)
+	}
+	for _, name := range []string{"stray.md", "broken.md"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("expected halt list to mention %s, got:\n%s", name, out)
+		}
 	}
 }
 
