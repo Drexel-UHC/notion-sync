@@ -123,7 +123,7 @@ Edit page B's `.md` file: change the 5 property values in the frontmatter to cle
 - `Due Date` (date): `2026-04-30`
 - `Category` (select): pick a **different existing option** from the schema (Research / Engineering / Design / Marketing — pick whichever is not page B's current value). Do **not** invent a new string — Notion auto-creates select options on push and never garbage-collects them, which would leave cruft in the test DB across runs.
 
-Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
+Run: `./notion-sync.exe push "./test-output/test database obsdiain complex" --yes`
 
 - **Pass criteria:**
   - Exit code 0
@@ -137,7 +137,7 @@ Then use Notion MCP (`notion-fetch` on page B's URL) to verify Notion now reflec
 ### Step 9d: Revert page B via push
 Restore page B's `.md` frontmatter to the original values recorded in Step 9b. Run push again:
 
-`./notion-sync.exe push "./test-output/test database obsdiain complex"`
+`./notion-sync.exe push "./test-output/test database obsdiain complex" --yes`
 
 - **Pass criteria:** exit 0, `Pushed + Skipped == Total`, no `Conflicts:` or `Failed:` lines in output.
 
@@ -146,7 +146,7 @@ Use Notion MCP to confirm page B's properties are back to their original values.
 ### Step 9e: Conflict detection
 Pick a third page (page C, not page A from Step 4 and not page B). Manually edit page C's `.md` to set `notion-last-edited:` to a clearly stale value like `2020-01-01T00:00:00.000Z`. Don't change any other properties.
 
-Run: `./notion-sync.exe push "./test-output/test database obsdiain complex"`
+Run: `./notion-sync.exe push "./test-output/test database obsdiain complex" --yes`
 
 - **Pass criteria:**
   - Exit code is **non-zero**
@@ -160,7 +160,7 @@ Page C still has its stale `notion-last-edited:` from the previous step. Re-run 
 
 > **Expected behavior (continued):** like Step 9e, force push writes every non-empty file. The point is to verify the override path on page C; the other 11 writes are no-ops on data values but still bump Notion timestamps. The resulting `Pushed:` count will be `Total`, not `1`.
 
-`./notion-sync.exe push "./test-output/test database obsdiain complex" --force`
+`./notion-sync.exe push "./test-output/test database obsdiain complex" --force --yes`
 
 - **Pass criteria:**
   - Exit code 0
