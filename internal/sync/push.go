@@ -35,11 +35,15 @@ func scanPushable(folderPath string) ([]pushableFile, error) {
 		filePath := filepath.Join(folderPath, entry.Name())
 		content, err := os.ReadFile(filePath)
 		if err != nil {
-			// Read failures bubble up — the gate classifies them as
-			// ClassHaltUnreadable, but under --force the gate is skipped, so
-			// silently dropping the file would leave the user unaware their
-			// .md was excluded. Loud > silent.
-			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+			// Silent skip is correct here: the validation gate
+			// (ValidatePushQueue) and the preview's scanLocalHalts both
+			// classify unreadable files as ClassHaltUnreadable, so the user
+			// sees them in the halt list. Erroring here would short-circuit
+			// BuildPushQueue before scanLocalHalts runs and turn a nice halt
+			// list into a raw "read foo.md: permission denied" error.
+			// Under --force the gate is skipped — silent drop matches the
+			// rest of yolo mode (strays, malformed YAML also silently skip).
+			continue
 		}
 		fm, err := frontmatter.Parse(string(content))
 		if err != nil || fm == nil {
