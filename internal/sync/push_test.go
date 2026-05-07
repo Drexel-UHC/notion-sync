@@ -254,6 +254,62 @@ func TestBuildPropertyValue_DateRange(t *testing.T) {
 	}
 }
 
+// frontmatter.Parse normalizes date-only YAML scalars (e.g. `Due Date: 2026-06-01`)
+// into RFC3339 datetimes (e.g. `2026-06-01T00:00:00Z`) because yaml.v3 auto-parses
+// them to time.Time. Without stripMidnightUTC, push then sends that datetime
+// string to Notion, which flips `is_datetime` false→true on every push.
+func TestBuildPropertyValue_Date_StripsMidnightUTC(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"Z suffix", "2026-06-01T00:00:00Z", "2026-06-01"},
+		{"Z with millis", "2026-06-01T00:00:00.000Z", "2026-06-01"},
+		{"plus offset zero", "2026-06-01T00:00:00+00:00", "2026-06-01"},
+		{"already date-only", "2026-06-01", "2026-06-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPropertyValue("date", tc.in).(map[string]interface{})
+			d := got["date"].(map[string]interface{})
+			if d["start"] != tc.want {
+				t.Errorf("got %q, want %q", d["start"], tc.want)
+			}
+		})
+	}
+}
+
+// Real datetimes (non-midnight or non-UTC) must pass through untouched —
+// stripMidnightUTC is a date-only repair, not a general datetime sanitizer.
+func TestBuildPropertyValue_Date_PreservesRealDatetimes(t *testing.T) {
+	cases := []string{
+		"2026-06-01T09:30:00Z",      // non-midnight UTC
+		"2026-06-01T00:00:00-05:00", // midnight non-UTC
+		"2026-06-01T00:00:01Z",      // off-by-one second
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			got := buildPropertyValue("date", in).(map[string]interface{})
+			d := got["date"].(map[string]interface{})
+			if d["start"] != in {
+				t.Errorf("got %q, want %q (real datetime should pass through)", d["start"], in)
+			}
+		})
+	}
+}
+
+func TestBuildPropertyValue_DateRange_StripsMidnightUTC(t *testing.T) {
+	got := buildPropertyValue("date", "2026-06-01T00:00:00Z → 2026-06-05T00:00:00Z").(map[string]interface{})
+	d := got["date"].(map[string]interface{})
+	if d["start"] != "2026-06-01" {
+		t.Errorf("start: got %q, want '2026-06-01'", d["start"])
+	}
+	if d["end"] != "2026-06-05" {
+		t.Errorf("end: got %q, want '2026-06-05'", d["end"])
+	}
+}
+
 func TestBuildPropertyValue_Relation(t *testing.T) {
 	got := buildPropertyValue("relation", []interface{}{"id1", "id2"}).(map[string]interface{})
 	rels := got["relation"].([]interface{})
