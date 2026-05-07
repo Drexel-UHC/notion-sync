@@ -2,6 +2,12 @@
 %% ELI-PM: ideal flow after the push redesign epic lands.
 %% Four phases — user call (once), validation gate (all files first), push (per row), run summary.
 %% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
+%% --- Confirmation gate (n12b → n13 → n13a) ---
+%%   Push is the only command that writes to a shared system (Notion).
+%%   n12b shows the user the queue (file paths + count) before any API write.
+%%   n13 requires explicit consent: y/N in TTY; --yes flag non-interactive.
+%%   Decline / missing flag → n13a (cancelled, exit 0, nothing sent).
+%%   See .context/features/push/features/confirmation-gate.md
 %% --- Glossary (frontmatter fields referenced below) ---
 %%   local notion-last-edited : ISO timestamp in the local file's frontmatter
 %%                              recording Notion's last_edited_time at last sync.
