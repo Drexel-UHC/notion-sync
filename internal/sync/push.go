@@ -11,6 +11,51 @@ import (
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
+// BuildPushQueue returns the .md file paths in folderPath that PushDatabase
+// would attempt to push: linked to Notion (`notion-id` present) and not
+// soft-deleted. Used by the confirmation gate (DAG n12b) before any Notion
+// API call. AGENTS.md and other non-synced files drop out via the notion-id
+// check. Errors if folderPath isn't a synced database so the user sees
+// "not a sync folder" rather than a misleading "nothing to push".
+func BuildPushQueue(folderPath string) ([]string, error) {
+	metadata, err := ReadDatabaseMetadata(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	if metadata == nil {
+		return nil, fmt.Errorf("no %s found in %s. Use 'import' to import the database first", DatabaseMetadataFile, folderPath)
+	}
+
+	dirEntries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read folder: %w", err)
+	}
+
+	var queue []string
+	for _, entry := range dirEntries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		filePath := filepath.Join(folderPath, entry.Name())
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+		fm, err := frontmatter.Parse(string(content))
+		if err != nil || fm == nil {
+			continue
+		}
+		if _, ok := fm["notion-id"].(string); !ok {
+			continue
+		}
+		if deleted, ok := fm["notion-deleted"].(bool); ok && deleted {
+			continue
+		}
+		queue = append(queue, filePath)
+	}
+	return queue, nil
+}
+
 // PushDatabase pushes local frontmatter property changes back to Notion.
 // Only page properties are updated; page body content is never modified.
 func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, error) {

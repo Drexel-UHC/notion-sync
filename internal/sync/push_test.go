@@ -767,6 +767,86 @@ func TestUpdateAfterPush_DoesNotCorruptValueContainingKey(t *testing.T) {
 	}
 }
 
+// --- BuildPushQueue tests (DAG n12b — preview-side queue construction) ---
+
+func TestBuildPushQueue_IncludesLinkedFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 1 {
+		t.Fatalf("expected 1 file, got %d (%v)", len(queue), queue)
+	}
+	if filepath.Base(queue[0]) != "page-001.md" {
+		t.Errorf("expected page-001.md, got %s", queue[0])
+	}
+}
+
+// AGENTS.md (no notion-id) and arbitrary unlinked files must be excluded —
+// the queue is "rows we'd push to Notion," and these aren't rows.
+func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Agent guide\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stray.md"), []byte("---\ntitle: stray\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Errorf("expected empty queue, got %v", queue)
+	}
+}
+
+func TestBuildPushQueue_SkipsDeletedEntries(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-deleted: true\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Errorf("expected deleted entry to be skipped, got %v", queue)
+	}
+}
+
+func TestBuildPushQueue_ErrorsWhenMetadataMissing(t *testing.T) {
+	dir := t.TempDir()
+	// No _database.json — folder is not a synced database.
+	md := "---\nnotion-id: page-001\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildPushQueue(dir)
+	if err == nil {
+		t.Fatal("expected error for folder without _database.json, got nil")
+	}
+	if !strings.Contains(err.Error(), "_database.json") {
+		t.Errorf("expected error to mention _database.json, got: %v", err)
+	}
+}
+
 // writeDatabaseMeta writes a minimal _database.json for tests.
 func writeDatabaseMeta(t *testing.T, dir, dbID string) {
 	t.Helper()

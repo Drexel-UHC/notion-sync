@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +114,94 @@ func TestCLI_AgentsMD_OverwritesExisting(t *testing.T) {
 	}
 	if strings.Contains(string(got), "# old") {
 		t.Errorf("AGENTS.md was not overwritten:\n%s", got)
+	}
+}
+
+// --- confirmPush tests (DAG n13 — consent gate before any Notion write) ---
+
+func TestConfirmPush_YesFlag_Proceeds(t *testing.T) {
+	var stderr bytes.Buffer
+	ok := confirmPush([]string{"a/page.md"}, true, false, strings.NewReader(""), &stderr)
+	if !ok {
+		t.Error("expected confirmPush to return true with --yes flag")
+	}
+	if !strings.Contains(stderr.String(), "Proceeding (--yes)") {
+		t.Errorf("expected 'Proceeding (--yes)' notice, got:\n%s", stderr.String())
+	}
+}
+
+// Non-interactive runs without --yes must cancel — that's the whole point of
+// requiring a flag in CI / piped contexts. Hint must mention --yes so the
+// user/agent knows how to opt in.
+func TestConfirmPush_NonTTY_NoFlag_Cancels(t *testing.T) {
+	var stderr bytes.Buffer
+	ok := confirmPush([]string{"a/page.md"}, false, false, strings.NewReader(""), &stderr)
+	if ok {
+		t.Error("expected confirmPush to cancel in non-TTY without --yes")
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "Cancelled") {
+		t.Errorf("expected cancellation message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--yes") {
+		t.Errorf("expected hint to mention --yes, got:\n%s", out)
+	}
+}
+
+func TestConfirmPush_TTY_Yes_Proceeds(t *testing.T) {
+	for _, ans := range []string{"y\n", "Y\n", "yes\n", "YES\n"} {
+		var stderr bytes.Buffer
+		ok := confirmPush([]string{"a/page.md"}, false, true, strings.NewReader(ans), &stderr)
+		if !ok {
+			t.Errorf("answer %q: expected proceed, got cancel\nstderr: %s", ans, stderr.String())
+		}
+	}
+}
+
+// Default-N is the safety property. Empty input (Enter), explicit "n", or
+// anything other than y/yes must cancel.
+func TestConfirmPush_TTY_DefaultN_Cancels(t *testing.T) {
+	for _, ans := range []string{"\n", "n\n", "N\n", "no\n", "maybe\n", ""} {
+		var stderr bytes.Buffer
+		ok := confirmPush([]string{"a/page.md"}, false, true, strings.NewReader(ans), &stderr)
+		if ok {
+			t.Errorf("answer %q: expected cancel, got proceed", ans)
+		}
+		if !strings.Contains(stderr.String(), "Cancelled") {
+			t.Errorf("answer %q: expected cancellation message, got:\n%s", ans, stderr.String())
+		}
+	}
+}
+
+// Preview must show every queued file and the count *before* the prompt
+// fires. Acceptance criterion from confirmation-gate.md.
+func TestConfirmPush_Preview_ListsFilesAndCount(t *testing.T) {
+	queue := []string{
+		"notion/db/page-001.md",
+		"notion/db/page-002.md",
+		"notion/db/page-003.md",
+	}
+	var stderr bytes.Buffer
+	confirmPush(queue, true, false, strings.NewReader(""), &stderr)
+
+	out := stderr.String()
+	if !strings.Contains(out, "3 files") {
+		t.Errorf("expected '3 files' in preview, got:\n%s", out)
+	}
+	for _, p := range queue {
+		base := filepath.Base(p)
+		if !strings.Contains(out, base) {
+			t.Errorf("expected %s in preview, got:\n%s", base, out)
+		}
+	}
+}
+
+// Singular noun for one file — small UX detail but worth pinning.
+func TestConfirmPush_Preview_SingularForOneFile(t *testing.T) {
+	var stderr bytes.Buffer
+	confirmPush([]string{"only.md"}, true, false, strings.NewReader(""), &stderr)
+	if !strings.Contains(stderr.String(), "1 file)") {
+		t.Errorf("expected '1 file)' (singular), got:\n%s", stderr.String())
 	}
 }
 
