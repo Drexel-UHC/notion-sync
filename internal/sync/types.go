@@ -87,4 +87,9 @@ type PushResult struct {
 	Failed        int
 	Errors        []string
 	ConflictFiles []string
+	// Halted is true iff the validation gate (DAG n22a) aborted the run before
+	// any Notion write. When true, Halts enumerates every halt-class file from
+	// the validation pass so the caller can surface them all at once.
+	Halted bool
+	Halts  []FileClassification
 }

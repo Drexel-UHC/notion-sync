@@ -116,6 +116,28 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		onProgress(ProgressPhase{Phase: PhasePushScanning})
 	}
 
+	// Validation gate (DAG n21+n22). All-or-nothing: any halt-class file
+	// across the whole folder aborts before any Notion write. --force skips
+	// the gate entirely (existing escape hatch, matches phase-1 behavior).
+	if !opts.Force {
+		report, err := ValidatePushQueue(opts.Client, opts.FolderPath)
+		if err != nil {
+			return nil, err
+		}
+		if report.Halted {
+			for _, f := range report.Files {
+				if f.Class.IsHalt() {
+					result.Halts = append(result.Halts, f)
+				}
+			}
+			result.Halted = true
+			if onProgress != nil {
+				onProgress(ProgressPhase{Phase: PhaseComplete})
+			}
+			return result, nil
+		}
+	}
+
 	files, err := scanPushable(opts.FolderPath)
 	if err != nil {
 		return nil, err
