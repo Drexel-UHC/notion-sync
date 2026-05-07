@@ -84,8 +84,11 @@ Commands:
   push      Push local frontmatter property changes back to Notion (properties only, no body)
             Previews the push queue and prompts y/N before any API write (TTY only).
             Non-interactive runs (CI / pipes) must pass --yes; otherwise the run is cancelled.
-            Refuses to push files where Notion has been edited since last sync, unless --force.
-            --force, -f    Push even if Notion has newer edits (overwrites Notion-side changes)
+            Runs a validation gate before any write: stray .md, malformed YAML, conflicting
+            timestamps, or unreachable rows halt the entire run (all-or-nothing).
+            --force, -f    Skip the validation gate entirely. Pushes despite conflicts,
+                           strays, malformed YAML, unreadable files, or unreachable rows.
+                           Use only after manual review — overwrites Notion-side changes.
             --dry-run      Show what would be pushed without writing to Notion (still reads from Notion for conflict detection)
             --yes, -y      Skip the confirmation prompt (required in non-interactive runs)
   list      List all synced databases and pages in a folder
@@ -430,15 +433,32 @@ func runRefreshPage(client *notion.Client, folderPath string, force, stripPresig
 // consent. Returns true if push should proceed, false to cancel cleanly
 // (caller exits 0). TTY: y/N prompt, default N. Non-TTY: requires `yes`,
 // otherwise cancels with a stderr hint. Caller must short-circuit on empty
-// queue before calling.
-func confirmPush(queue []string, yes, isTTY bool, stdin io.Reader, stderr io.Writer) bool {
+// queue + empty halts before calling.
+//
+// Local halts (stray .md, malformed YAML — detected without any Notion
+// API call) are surfaced here so the user sees them at consent time
+// instead of confirming a queue and then getting halted on a file they
+// were never shown. The validation gate enumerates the full halt list
+// later; this preview is the early warning.
+func confirmPush(preview *sync.PushPreview, yes, isTTY bool, stdin io.Reader, stderr io.Writer) bool {
 	noun := "file"
-	if len(queue) != 1 {
+	if len(preview.Queue) != 1 {
 		noun = "files"
 	}
-	fmt.Fprintf(stderr, "Push queue (%d %s):\n", len(queue), noun)
-	for _, p := range queue {
+	fmt.Fprintf(stderr, "Push queue (%d %s):\n", len(preview.Queue), noun)
+	for _, p := range preview.Queue {
 		fmt.Fprintf(stderr, "  %s\n", filepath.Base(p))
+	}
+
+	if len(preview.LocalHalts) > 0 {
+		haltNoun := "file"
+		if len(preview.LocalHalts) != 1 {
+			haltNoun = "files"
+		}
+		fmt.Fprintf(stderr, "\nWill halt the run (%d %s — fix before continuing):\n", len(preview.LocalHalts), haltNoun)
+		for _, h := range preview.LocalHalts {
+			fmt.Fprintf(stderr, "  %s — %s\n", filepath.Base(h.Path), h.Reason)
+		}
 	}
 	fmt.Fprintln(stderr)
 
@@ -472,8 +492,8 @@ func isStdinTTY() bool {
 func runPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	apiKey := fs.String("api-key", "", "Notion API key")
-	force := fs.Bool("force", false, "Push even if Notion has newer edits")
-	forceShort := fs.Bool("f", false, "Push even if Notion has newer edits (shorthand)")
+	force := fs.Bool("force", false, "Skip the validation gate entirely (bypasses conflicts, strays, malformed YAML, and unreachable rows)")
+	forceShort := fs.Bool("f", false, "Skip the validation gate entirely (shorthand)")
 	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing to Notion")
 	yes := fs.Bool("yes", false, "Skip the confirmation prompt (required for non-interactive runs)")
 	yesShort := fs.Bool("y", false, "Skip the confirmation prompt (shorthand)")
@@ -509,15 +529,15 @@ func runPush(args []string) error {
 	// Push is the only command that writes to Notion; gate fires before any
 	// API call. Skipped under --dry-run since no writes occur.
 	if !*dryRun {
-		queue, err := sync.BuildPushQueue(folderPath)
+		preview, err := sync.BuildPushQueue(folderPath)
 		if err != nil {
 			return err
 		}
-		if len(queue) == 0 {
+		if len(preview.Queue) == 0 && len(preview.LocalHalts) == 0 {
 			fmt.Fprintln(os.Stderr, "Nothing to push: no synced .md files in folder.")
 			return nil
 		}
-		if !confirmPush(queue, yesFlag, isStdinTTY(), os.Stdin, os.Stderr) {
+		if !confirmPush(preview, yesFlag, isStdinTTY(), os.Stdin, os.Stderr) {
 			return nil
 		}
 	}
@@ -551,6 +571,19 @@ func runPush(args []string) error {
 	}
 
 	fmt.Println()
+
+	// Validation halted (DAG n22a) — print the enumerated halt list and
+	// exit non-zero so scripts/CI can detect the abort. No "Done"
+	// message because nothing was pushed.
+	if result.Halted {
+		fmt.Printf("Halted: \"%s\"\n", result.Title)
+		fmt.Printf("  Inspected: %d\n", result.Total)
+		fmt.Printf("  Halts:     %d (nothing pushed — fix all before retrying)\n", len(result.Halts))
+		for _, h := range result.Halts {
+			fmt.Printf("    - %s [%s] — %s\n", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
+		}
+		return fmt.Errorf("push halted by validation gate (%d halt(s))", len(result.Halts))
+	}
 
 	if *dryRun {
 		fmt.Printf("Dry run: \"%s\"\n", result.Title)
@@ -587,6 +620,26 @@ func runPush(args []string) error {
 	}
 
 	return nil
+}
+
+// haltClassLabel renders a Classification as a short user-facing label
+// for the halt list. Mirrors the DAG node taxonomy so the user can map
+// an output line back to the spec without a code dive.
+func haltClassLabel(c sync.Classification) string {
+	switch c {
+	case sync.ClassHaltConflict:
+		return "conflict"
+	case sync.ClassHaltUnexpected:
+		return "stray"
+	case sync.ClassHaltUnreachable:
+		return "unreachable"
+	case sync.ClassHaltMalformed:
+		return "malformed"
+	case sync.ClassHaltUnreadable:
+		return "unreadable"
+	default:
+		return "halt"
+	}
 }
 
 //// 2.4 List ----
