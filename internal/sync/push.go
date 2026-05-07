@@ -11,6 +11,70 @@ import (
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
+// pushableFile is a folder entry the push pipeline will act on: a .md file
+// linked to Notion (`notion-id` present) and not soft-deleted.
+type pushableFile struct {
+	path string
+	fm   map[string]interface{}
+}
+
+// scanPushable is the single source of truth for "what counts as pushable" —
+// both BuildPushQueue (preview) and PushDatabase (action) call it so the
+// confirmation gate's preview-equals-action contract holds by construction,
+// not by hand-keeping two filter loops in sync.
+func scanPushable(folderPath string) ([]pushableFile, error) {
+	dirEntries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read folder: %w", err)
+	}
+	var files []pushableFile
+	for _, entry := range dirEntries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		filePath := filepath.Join(folderPath, entry.Name())
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+		fm, err := frontmatter.Parse(string(content))
+		if err != nil || fm == nil {
+			continue
+		}
+		if _, ok := fm["notion-id"].(string); !ok {
+			continue
+		}
+		if deleted, ok := fm["notion-deleted"].(bool); ok && deleted {
+			continue
+		}
+		files = append(files, pushableFile{path: filePath, fm: fm})
+	}
+	return files, nil
+}
+
+// BuildPushQueue returns the .md file paths in folderPath that PushDatabase
+// would attempt to push. Used by the confirmation gate (DAG n12b) before any
+// Notion API call. Errors if folderPath isn't a synced database so the user
+// sees "not a sync folder" rather than a misleading "nothing to push".
+func BuildPushQueue(folderPath string) ([]string, error) {
+	metadata, err := ReadDatabaseMetadata(folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("read metadata: %w", err)
+	}
+	if metadata == nil {
+		return nil, fmt.Errorf("no %s found in %s. Use 'import' to import the database first", DatabaseMetadataFile, folderPath)
+	}
+	files, err := scanPushable(folderPath)
+	if err != nil {
+		return nil, err
+	}
+	queue := make([]string, 0, len(files))
+	for _, f := range files {
+		queue = append(queue, f.path)
+	}
+	return queue, nil
+}
+
 // PushDatabase pushes local frontmatter property changes back to Notion.
 // Only page properties are updated; page body content is never modified.
 func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, error) {
@@ -52,37 +116,9 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		onProgress(ProgressPhase{Phase: PhasePushScanning})
 	}
 
-	type fileEntry struct {
-		path string
-		fm   map[string]interface{}
-	}
-
-	dirEntries, err := os.ReadDir(opts.FolderPath)
+	files, err := scanPushable(opts.FolderPath)
 	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
-	}
-
-	var files []fileEntry
-	for _, entry := range dirEntries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		filePath := filepath.Join(opts.FolderPath, entry.Name())
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			continue
-		}
-		fm, err := frontmatter.Parse(string(content))
-		if err != nil || fm == nil {
-			continue
-		}
-		if _, ok := fm["notion-id"].(string); !ok {
-			continue
-		}
-		if deleted, ok := fm["notion-deleted"].(bool); ok && deleted {
-			continue
-		}
-		files = append(files, fileEntry{filePath, fm})
+		return nil, err
 	}
 
 	result.Total = len(files)
@@ -321,14 +357,35 @@ func parseDatePayload(s string) interface{} {
 		parts := strings.SplitN(s, " → ", 2)
 		return map[string]interface{}{
 			"date": map[string]interface{}{
-				"start": strings.TrimSpace(parts[0]),
-				"end":   strings.TrimSpace(parts[1]),
+				"start": stripMidnightUTC(strings.TrimSpace(parts[0])),
+				"end":   stripMidnightUTC(strings.TrimSpace(parts[1])),
 			},
 		}
 	}
 	return map[string]interface{}{
-		"date": map[string]interface{}{"start": s},
+		"date": map[string]interface{}{"start": stripMidnightUTC(s)},
 	}
+}
+
+// stripMidnightUTC demotes "YYYY-MM-DDT00:00:00Z" back to "YYYY-MM-DD".
+// Workaround for yaml.v3 + frontmatter.Parse collapsing date-only scalars
+// into RFC3339 datetimes — without this, every date-only property gets
+// promoted to a UTC datetime on Notion (is_datetime flips false→true) on
+// every push. See .context/features/push/backlog/date-only-roundtrip.md
+// for the proper fix (yaml.Node parsing to preserve original tokens).
+func stripMidnightUTC(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	if t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 || t.Nanosecond() != 0 {
+		return s
+	}
+	_, off := t.Zone()
+	if off != 0 {
+		return s
+	}
+	return t.Format("2006-01-02")
 }
 
 func coerceString(val interface{}) string {

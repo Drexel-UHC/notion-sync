@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/zalando/go-keyring v0.2.4
+	golang.org/x/term v0.27.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

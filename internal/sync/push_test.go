@@ -254,6 +254,62 @@ func TestBuildPropertyValue_DateRange(t *testing.T) {
 	}
 }
 
+// frontmatter.Parse normalizes date-only YAML scalars (e.g. `Due Date: 2026-06-01`)
+// into RFC3339 datetimes (e.g. `2026-06-01T00:00:00Z`) because yaml.v3 auto-parses
+// them to time.Time. Without stripMidnightUTC, push then sends that datetime
+// string to Notion, which flips `is_datetime` false→true on every push.
+func TestBuildPropertyValue_Date_StripsMidnightUTC(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"Z suffix", "2026-06-01T00:00:00Z", "2026-06-01"},
+		{"Z with millis", "2026-06-01T00:00:00.000Z", "2026-06-01"},
+		{"plus offset zero", "2026-06-01T00:00:00+00:00", "2026-06-01"},
+		{"already date-only", "2026-06-01", "2026-06-01"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPropertyValue("date", tc.in).(map[string]interface{})
+			d := got["date"].(map[string]interface{})
+			if d["start"] != tc.want {
+				t.Errorf("got %q, want %q", d["start"], tc.want)
+			}
+		})
+	}
+}
+
+// Real datetimes (non-midnight or non-UTC) must pass through untouched —
+// stripMidnightUTC is a date-only repair, not a general datetime sanitizer.
+func TestBuildPropertyValue_Date_PreservesRealDatetimes(t *testing.T) {
+	cases := []string{
+		"2026-06-01T09:30:00Z",      // non-midnight UTC
+		"2026-06-01T00:00:00-05:00", // midnight non-UTC
+		"2026-06-01T00:00:01Z",      // off-by-one second
+	}
+	for _, in := range cases {
+		t.Run(in, func(t *testing.T) {
+			got := buildPropertyValue("date", in).(map[string]interface{})
+			d := got["date"].(map[string]interface{})
+			if d["start"] != in {
+				t.Errorf("got %q, want %q (real datetime should pass through)", d["start"], in)
+			}
+		})
+	}
+}
+
+func TestBuildPropertyValue_DateRange_StripsMidnightUTC(t *testing.T) {
+	got := buildPropertyValue("date", "2026-06-01T00:00:00Z → 2026-06-05T00:00:00Z").(map[string]interface{})
+	d := got["date"].(map[string]interface{})
+	if d["start"] != "2026-06-01" {
+		t.Errorf("start: got %q, want '2026-06-01'", d["start"])
+	}
+	if d["end"] != "2026-06-05" {
+		t.Errorf("end: got %q, want '2026-06-05'", d["end"])
+	}
+}
+
 func TestBuildPropertyValue_Relation(t *testing.T) {
 	got := buildPropertyValue("relation", []interface{}{"id1", "id2"}).(map[string]interface{})
 	rels := got["relation"].([]interface{})
@@ -764,6 +820,150 @@ func TestUpdateAfterPush_DoesNotCorruptValueContainingKey(t *testing.T) {
 	}
 	if !strings.Contains(s, "notion-last-pushed: 2024-06-01T01:00:00Z") {
 		t.Error("notion-last-pushed was not written")
+	}
+}
+
+// --- BuildPushQueue tests (DAG n12b — preview-side queue construction) ---
+
+func TestBuildPushQueue_IncludesLinkedFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 1 {
+		t.Fatalf("expected 1 file, got %d (%v)", len(queue), queue)
+	}
+	if filepath.Base(queue[0]) != "page-001.md" {
+		t.Errorf("expected page-001.md, got %s", queue[0])
+	}
+}
+
+// AGENTS.md (no notion-id) and arbitrary unlinked files must be excluded —
+// the queue is "rows we'd push to Notion," and these aren't rows.
+func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Agent guide\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stray.md"), []byte("---\ntitle: stray\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Errorf("expected empty queue, got %v", queue)
+	}
+}
+
+func TestBuildPushQueue_SkipsDeletedEntries(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-deleted: true\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Errorf("expected deleted entry to be skipped, got %v", queue)
+	}
+}
+
+func TestBuildPushQueue_ErrorsWhenMetadataMissing(t *testing.T) {
+	dir := t.TempDir()
+	// No _database.json — folder is not a synced database.
+	md := "---\nnotion-id: page-001\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildPushQueue(dir)
+	if err == nil {
+		t.Fatal("expected error for folder without _database.json, got nil")
+	}
+	if !strings.Contains(err.Error(), "_database.json") {
+		t.Errorf("expected error to mention _database.json, got: %v", err)
+	}
+}
+
+// Parity contract: the gate's preview must equal the action. BuildPushQueue
+// (preview) and PushDatabase (action) both call scanPushable, so this test
+// pins the invariant — if anyone re-introduces a divergent filter, this
+// fails.
+func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Mix of pushable + every kind of non-pushable file the filter should
+	// exclude. If the two code paths disagree on any of these, the gate is
+	// a lie.
+	files := map[string]string{
+		"keep-001.md":      "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
+		"keep-002.md":      "---\nnotion-id: page-002\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
+		"AGENTS.md":        "# Guide for downstream agents\n",
+		"no-notion-id.md":  "---\ntitle: stray\n---\n",
+		"deleted.md":       "---\nnotion-id: page-deleted\nnotion-deleted: true\n---\n",
+		"not-markdown.txt": "ignored",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queue, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("BuildPushQueue: %v", err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Name": {Type: "title"},
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+	client.pages["page-002"] = &notion.Page{ID: "page-002", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, DryRun: true}, nil)
+	if err != nil {
+		t.Fatalf("PushDatabase: %v", err)
+	}
+
+	if result.Total != len(queue) {
+		t.Fatalf("preview/action divergence: BuildPushQueue=%d PushDatabase.Total=%d", len(queue), result.Total)
+	}
+	queueBasenames := make(map[string]bool, len(queue))
+	for _, p := range queue {
+		queueBasenames[filepath.Base(p)] = true
+	}
+	for _, want := range []string{"keep-001.md", "keep-002.md"} {
+		if !queueBasenames[want] {
+			t.Errorf("queue missing %s; got %v", want, queue)
+		}
+	}
+	for _, exclude := range []string{"AGENTS.md", "no-notion-id.md", "deleted.md", "not-markdown.txt"} {
+		if queueBasenames[exclude] {
+			t.Errorf("queue should not include %s; got %v", exclude, queue)
+		}
 	}
 }
 

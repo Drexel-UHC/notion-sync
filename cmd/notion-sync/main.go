@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 
 	"github.com/ran-codes/notion-sync/internal/clean"
 	"github.com/ran-codes/notion-sync/internal/config"
@@ -22,6 +27,7 @@ var boolFlags = map[string]bool{
 	"--force": true, "-f": true,
 	"--keep-presigned-params": true,
 	"--dry-run":               true,
+	"--yes":                   true, "-y": true,
 }
 
 // reorderArgs moves flag arguments (starting with "-") before positional arguments
@@ -60,7 +66,7 @@ var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + v
 Usage:
   notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>] [--keep-presigned-params]
   notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>] [--keep-presigned-params]
-  notion-sync push <folder> [--force] [--dry-run] [--api-key <key>]
+  notion-sync push <folder> [--force] [--dry-run] [--yes] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync clean <folder> [--dry-run]
   notion-sync agents-md <folder>
@@ -76,9 +82,12 @@ Commands:
             --force, -f    Resync all entries, ignoring timestamps
             --keep-presigned-params  Keep AWS S3 pre-signed query strings on file URLs
   push      Push local frontmatter property changes back to Notion (properties only, no body)
+            Previews the push queue and prompts y/N before any API write (TTY only).
+            Non-interactive runs (CI / pipes) must pass --yes; otherwise the run is cancelled.
             Refuses to push files where Notion has been edited since last sync, unless --force.
             --force, -f    Push even if Notion has newer edits (overwrites Notion-side changes)
             --dry-run      Show what would be pushed without writing to Notion (still reads from Notion for conflict detection)
+            --yes, -y      Skip the confirmation prompt (required in non-interactive runs)
   list      List all synced databases and pages in a folder
   clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
             Useful one-time backfill after upgrading. No API calls.
@@ -417,12 +426,57 @@ func runRefreshPage(client *notion.Client, folderPath string, force, stripPresig
 
 //// 2.3 Push ----
 
+// confirmPush previews the push queue to stderr and gates execution on user
+// consent. Returns true if push should proceed, false to cancel cleanly
+// (caller exits 0). TTY: y/N prompt, default N. Non-TTY: requires `yes`,
+// otherwise cancels with a stderr hint. Caller must short-circuit on empty
+// queue before calling.
+func confirmPush(queue []string, yes, isTTY bool, stdin io.Reader, stderr io.Writer) bool {
+	noun := "file"
+	if len(queue) != 1 {
+		noun = "files"
+	}
+	fmt.Fprintf(stderr, "Push queue (%d %s):\n", len(queue), noun)
+	for _, p := range queue {
+		fmt.Fprintf(stderr, "  %s\n", filepath.Base(p))
+	}
+	fmt.Fprintln(stderr)
+
+	if yes {
+		fmt.Fprintln(stderr, "Proceeding (--yes).")
+		return true
+	}
+	if !isTTY {
+		fmt.Fprintln(stderr, "Cancelled — non-interactive run requires --yes to push.")
+		return false
+	}
+
+	fmt.Fprint(stderr, "Proceed? [y/N]: ")
+	line, _ := bufio.NewReader(stdin).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	if answer == "y" || answer == "yes" {
+		return true
+	}
+	fmt.Fprintln(stderr, "Cancelled — nothing pushed to Notion.")
+	return false
+}
+
+// isStdinTTY reports whether stdin is connected to a terminal (vs a pipe or
+// redirect). Uses x/term so mintty-based shells (Git Bash, MSYS2, Cygwin)
+// are detected correctly — the stdlib `os.ModeCharDevice` check misses them
+// because mintty wraps stdio in named pipes.
+func isStdinTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
 func runPush(args []string) error {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
 	apiKey := fs.String("api-key", "", "Notion API key")
 	force := fs.Bool("force", false, "Push even if Notion has newer edits")
 	forceShort := fs.Bool("f", false, "Push even if Notion has newer edits (shorthand)")
 	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing to Notion")
+	yes := fs.Bool("yes", false, "Skip the confirmation prompt (required for non-interactive runs)")
+	yesShort := fs.Bool("y", false, "Skip the confirmation prompt (shorthand)")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -430,7 +484,7 @@ func runPush(args []string) error {
 
 	if fs.NArg() == 0 {
 		return fmt.Errorf("missing folder path\n" +
-			"Usage: notion-sync push <folder> [--force] [--dry-run] [--api-key <key>]\n" +
+			"Usage: notion-sync push <folder> [--force] [--dry-run] [--yes] [--api-key <key>]\n" +
 			"Example: notion-sync push ./notion/My\\ Database")
 	}
 
@@ -449,6 +503,24 @@ func runPush(args []string) error {
 
 	folderPath := fs.Arg(0)
 	forceFlag := *force || *forceShort
+	yesFlag := *yes || *yesShort
+
+	// Confirmation gate (DAG nodes n12b → n13 → n13a in v1.4.0 push design).
+	// Push is the only command that writes to Notion; gate fires before any
+	// API call. Skipped under --dry-run since no writes occur.
+	if !*dryRun {
+		queue, err := sync.BuildPushQueue(folderPath)
+		if err != nil {
+			return err
+		}
+		if len(queue) == 0 {
+			fmt.Fprintln(os.Stderr, "Nothing to push: no synced .md files in folder.")
+			return nil
+		}
+		if !confirmPush(queue, yesFlag, isStdinTTY(), os.Stdin, os.Stderr) {
+			return nil
+		}
+	}
 
 	if *dryRun {
 		fmt.Println("Pushing properties (dry run)...")
