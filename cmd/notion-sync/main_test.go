@@ -214,3 +214,106 @@ func TestCLI_Version(t *testing.T) {
 		t.Error("expected version output")
 	}
 }
+
+// --- CLI e2e tests for the push confirmation gate ---
+//
+// These exercise the full CLI wiring (flag parsing → API-key validation →
+// gate → push flow) that the in-process confirmPush unit tests above don't
+// cover. Subprocess stdin is non-TTY, so isStdinTTY() returns false in the
+// child process — exactly the CI / piped-input scenario we care about.
+
+// dummyAPIKey is a syntactically valid Notion API key (ntn_ prefix, >= 20
+// chars) that passes config.ValidateAPIKey but won't authenticate against
+// the real API. Lets these tests reach the gate without a real key, and
+// guarantees any subsequent Notion call fails fast.
+const dummyAPIKey = "ntn_0000000000000000000000000000000000000000000000"
+
+// setupPushFolder creates a tmp folder with a minimal _database.json plus
+// one .md file with a notion-id frontmatter — enough for BuildPushQueue to
+// return a non-empty queue so the gate actually fires.
+func setupPushFolder(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+
+	meta := `{
+  "databaseId": "00000000-0000-0000-0000-000000000001",
+  "title": "Test DB",
+  "url": "",
+  "folderPath": "",
+  "lastSyncedAt": "",
+  "entryCount": 1
+}
+`
+	if err := os.WriteFile(filepath.Join(tmp, "_database.json"), []byte(meta), 0644); err != nil {
+		t.Fatal(err)
+	}
+	page := "---\nnotion-id: 00000000-0000-0000-0000-000000000002\ntitle: Page One\n---\n\nbody\n"
+	if err := os.WriteFile(filepath.Join(tmp, "page-one.md"), []byte(page), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return tmp
+}
+
+// pushCmd builds a `go run . push <folder> [extra...]` command with a dummy
+// API key in the env so validation passes and the run reaches the gate.
+func pushCmd(folder string, extra ...string) *exec.Cmd {
+	args := append([]string{"run", ".", "push", folder}, extra...)
+	cmd := exec.Command("go", args...)
+	cmd.Env = append(os.Environ(), "NOTION_SYNC_API_KEY="+dummyAPIKey)
+	return cmd
+}
+
+// Non-TTY (subprocess stdin) without --yes must cancel cleanly with exit 0
+// and a stderr hint pointing at --yes. The push flow ("Pushing properties
+// to Notion...") must NOT execute — proves the gate fired before any
+// Notion API call.
+func TestCLI_Push_NonTTY_NoYes_Cancels(t *testing.T) {
+	tmp := setupPushFolder(t)
+
+	out, err := pushCmd(tmp).CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected exit 0 on cancel, got %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, "Cancelled") {
+		t.Errorf("expected 'Cancelled' in output, got:\n%s", s)
+	}
+	if !strings.Contains(s, "--yes") {
+		t.Errorf("expected '--yes' hint in output, got:\n%s", s)
+	}
+	if strings.Contains(s, "Pushing properties to Notion...") {
+		t.Errorf("gate should fire before push flow, but push started:\n%s", s)
+	}
+}
+
+// --yes bypasses the gate even in non-TTY. We don't care that the push
+// itself fails (dummy key → 401); we only need to prove control reached
+// the push flow past the gate.
+func TestCLI_Push_Yes_PassesGate(t *testing.T) {
+	tmp := setupPushFolder(t)
+
+	out, _ := pushCmd(tmp, "--yes").CombinedOutput()
+	s := string(out)
+	if strings.Contains(s, "Cancelled — non-interactive") {
+		t.Errorf("--yes should bypass gate, but got cancellation:\n%s", s)
+	}
+	if !strings.Contains(s, "Pushing properties to Notion...") {
+		t.Errorf("expected push flow to start past the gate, got:\n%s", s)
+	}
+}
+
+// --dry-run skips the gate entirely (no writes, no consent needed). The
+// gate's preview header ("Push queue (") must not appear, and the dry-run
+// banner must.
+func TestCLI_Push_DryRun_SkipsGate(t *testing.T) {
+	tmp := setupPushFolder(t)
+
+	out, _ := pushCmd(tmp, "--dry-run").CombinedOutput()
+	s := string(out)
+	if strings.Contains(s, "Push queue (") {
+		t.Errorf("--dry-run should skip the gate, but preview ran:\n%s", s)
+	}
+	if !strings.Contains(s, "Pushing properties (dry run)...") {
+		t.Errorf("expected dry-run banner, got:\n%s", s)
+	}
+}
