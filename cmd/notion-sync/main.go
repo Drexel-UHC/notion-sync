@@ -576,12 +576,7 @@ func runPush(args []string) error {
 	// exit non-zero so scripts/CI can detect the abort. No "Done"
 	// message because nothing was pushed.
 	if result.Halted {
-		fmt.Printf("Halted: \"%s\"\n", result.Title)
-		fmt.Printf("  Inspected: %d\n", result.Total)
-		fmt.Printf("  Halts:     %d (nothing pushed — fix all before retrying)\n", len(result.Halts))
-		for _, h := range result.Halts {
-			fmt.Printf("    - %s [%s] — %s\n", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
-		}
+		renderHaltedResult(result, os.Stdout)
 		return fmt.Errorf("push halted by validation gate (%d halt(s))", len(result.Halts))
 	}
 
@@ -620,6 +615,19 @@ func runPush(args []string) error {
 	}
 
 	return nil
+}
+
+// renderHaltedResult writes the validation-gate halt summary (DAG n22a)
+// to w. Extracted so the user-visible halt format — header lines, per-halt
+// line shape, and the haltClassLabel mapping — is unit-testable without a
+// subprocess or a fake Notion server. runPush is the only caller.
+func renderHaltedResult(result *sync.PushResult, w io.Writer) {
+	fmt.Fprintf(w, "Halted: \"%s\"\n", result.Title)
+	fmt.Fprintf(w, "  Inspected: %d\n", result.Total)
+	fmt.Fprintf(w, "  Halts:     %d (nothing pushed — fix all before retrying)\n", len(result.Halts))
+	for _, h := range result.Halts {
+		fmt.Fprintf(w, "    - %s [%s] — %s\n", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
+	}
 }
 
 // haltClassLabel renders a Classification as a short user-facing label

@@ -335,6 +335,55 @@ func TestCLI_Push_Yes_PassesGate(t *testing.T) {
 	}
 }
 
+// renderHaltedResult formats the user-visible halt summary the CLI prints
+// when the validation gate aborts. Pins the exact output shape so a refactor
+// that breaks the "Halted:" header, drops the [class] label, mangles the
+// inspected/halts counts, or stops base-naming the halt path trips this test.
+// The full subprocess CLI test can't reach this code path (the dummy API key
+// dies on schema fetch before the gate fires) — extracting + testing the
+// renderer directly is the path that actually pins the contract.
+func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
+	result := &sync.PushResult{
+		Title:  "Test DB",
+		Total:  4, // 4 inspected: 2 ready + 2 halted
+		Halted: true,
+		Halts: []sync.FileClassification{
+			{Path: "/tmp/folder/page-2.md", Class: sync.ClassHaltConflict, Reason: "Notion's row has changed since last sync"},
+			{Path: "/tmp/folder/stray.md", Class: sync.ClassHaltUnexpected, Reason: "file has no notion-id"},
+		},
+	}
+	var buf bytes.Buffer
+	renderHaltedResult(result, &buf)
+	out := buf.String()
+
+	// Header: title quoted, inspected count from result.Total (NOT len(Halts)),
+	// halts count + the "nothing pushed" hint.
+	if !strings.Contains(out, `Halted: "Test DB"`) {
+		t.Errorf("expected quoted title in 'Halted:' header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Inspected: 4") {
+		t.Errorf("expected 'Inspected: 4' (from result.Total), got:\n%s", out)
+	}
+	if !strings.Contains(out, "Halts:     2 (nothing pushed") {
+		t.Errorf("expected halts count + 'nothing pushed' hint, got:\n%s", out)
+	}
+
+	// Per-halt lines: basename only (not full path), [haltClassLabel], reason.
+	// Two different classes prove the haltClassLabel mapping is wired — if the
+	// switch breaks, both labels fall through to "halt" and these miss.
+	if !strings.Contains(out, "page-2.md [conflict] — Notion's row has changed since last sync") {
+		t.Errorf("expected page-2.md line with [conflict] label and reason, got:\n%s", out)
+	}
+	if !strings.Contains(out, "stray.md [stray] — file has no notion-id") {
+		t.Errorf("expected stray.md line with [stray] label and reason, got:\n%s", out)
+	}
+	// Full path must NOT appear — basename only, otherwise output bloats with
+	// the user's tmp paths.
+	if strings.Contains(out, "/tmp/folder/page-2.md") {
+		t.Errorf("expected basename only in halt line, got full path in:\n%s", out)
+	}
+}
+
 // --dry-run skips the gate entirely (no writes, no consent needed). The
 // gate's preview header ("Push queue (") must not appear, and the dry-run
 // banner must.
