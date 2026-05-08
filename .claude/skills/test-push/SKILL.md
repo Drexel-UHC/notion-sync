@@ -104,8 +104,9 @@ The push command iterates **every** `.md` file in the folder and sends each one'
 
 **Phase 1 only needs Page 1.** Delete the other six pages' `.md` files so the push queue contains exactly the canary:
 
-- Keep: `Push- Canary.md` (the `:` in `Push: Canary` is sanitized to `-` on import)
-- Delete: every other `.md` file in `./test-output/push-e2e/notion-sync-test-database-push/`
+- **Filename convention:** the importer writes `.md` files named `<notion-id>.md` (e.g. `35957008-e885-813a-886b-cbb6dd7c1598.md`), NOT title-derived names. Every "edit Page X's `.md`" step below means "edit the file whose name matches Page X's notion-id from the `setup.md` fixture table."
+- Keep: `35957008-e885-813a-886b-cbb6dd7c1598.md` (Page 1 — Canary)
+- Delete: the six `.md` files for Pages 2–7 (notion-ids in `setup.md`)
 - Don't touch: `_database.json`, `AGENTS.md`
 
 Verify: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run` should show `Push queue (1 file)` listing only the canary.
@@ -180,6 +181,18 @@ The validation gate classifies every `.md` against 8 outcomes (n21a–h). Any ha
 
 **Halt → exit 1.** A halted run prints `Halted: "<title>"` and an enumerated halt list to stdout, plus `push halted by validation gate (N halt(s))` to stderr, and exits **1**. Cancel (Phase 1) is exit 0; halt is exit 1. Don't conflate them.
 
+**Filename quick reference** (from `setup.md`; importer writes `<notion-id>.md`):
+
+| Page | notion-id (filename without `.md`) |
+|---|---|
+| 1 — Canary | `35957008-e885-813a-886b-cbb6dd7c1598` |
+| 2 — Conflict A | `35957008-e885-811d-ae4b-eb73607cc037` |
+| 3 — Conflict B | `35957008-e885-8141-9e44-ef7c58e4a487` |
+| 4 — Formatting (NEVER touch) | `35957008-e885-8192-ab0f-c75e6a011b10` |
+| 5 — Cell-Level | `35957008-e885-815e-8e73-ea79c22f96d4` |
+| 6 — Soft Deleted | `35957008-e885-81e0-83c1-ff9fb4dbfda5` |
+| 7 — Null Edges | `35957008-e885-814f-9f19-c401d454b08d` |
+
 ### Step V0: Re-import for Phase 2
 
 Phase 1's Step 4 deleted Pages 2–7 from disk. Phase 2 needs them back.
@@ -227,16 +240,18 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 Re-run V0. Then:
 
-1. Edit Page 6's local `.md` (`Push- Soft Deleted.md`): add `notion-deleted: true` to its frontmatter.
-2. Delete every other page's `.md` (Page 4 critical) so the folder has only Page 6.
+1. Edit Page 6's local `.md`: add `notion-deleted: true` to its frontmatter.
+2. Keep Page 5's `.md` alongside Page 6 — without a non-deleted file, the queue ends up empty and the CLI short-circuits with `"Nothing to push: no synced .md files in folder."` *before* the validation gate fires (so n21b never gets exercised). Page 5 is the safest neighbor: clean by default, not the phase-3 fixture, and pushing it round-trips its current canonical values without drift.
+3. Delete the other 5 pages' `.md` (Page 4 critical) so the folder has Pages 5 + 6 only.
 
 Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
 
 - **Pass:**
   - Exit code **0** — soft-deleted is skip, not halt.
   - stdout does NOT contain `Halted:`.
-  - stdout shows `Total: 0` (deleted rows aren't counted as pushable) or equivalent skip-only summary.
-  - **Notion MCP fetch** of Page 6: `Score` still **600**, all properties unchanged.
+  - stdout shows `Pushed: 1` (Page 5 round-trip) and a summary line, NOT `"Nothing to push"` (gate ran).
+  - **Notion MCP fetch** of Page 6: `Score` still **600**, all properties unchanged (skip path proven).
+  - **Notion MCP fetch** of Page 5: `Score` still **500** (round-trip with no value drift).
 
 **Revert:** re-run V0 to re-import fresh.
 
