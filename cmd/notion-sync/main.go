@@ -620,7 +620,7 @@ func runPush(args []string) error {
 // renderHaltedResult writes the validation-gate halt summary (DAG n22a)
 // to w. Extracted so the user-visible halt format — header lines, per-halt
 // line shape, and the haltClassLabel mapping — is unit-testable without a
-// subprocess or a fake Notion server. runPush is the only caller.
+// subprocess or a fake Notion server.
 func renderHaltedResult(result *sync.PushResult, w io.Writer) {
 	fmt.Fprintf(w, "Halted: \"%s\"\n", result.Title)
 	fmt.Fprintf(w, "  Inspected: %d\n", result.Total)

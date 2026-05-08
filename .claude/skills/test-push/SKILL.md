@@ -173,7 +173,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 ---
 
-## Phase 2 — Validation halts (DAG n21 series → n22a/b)
+## Phase 2 — Validation halts (DAG n21 series → n22a)
 
 The validation gate classifies every `.md` against 8 outcomes (n21a–h). Any halt-class file aborts the **entire** run before any Notion write — all-or-nothing. `--force` bypasses the entire gate.
 
@@ -231,7 +231,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 - **Pass:**
   - Exit code **1**
   - stdout enumerates **3 halts**: Page 2 `[conflict]`, Page 3 `[conflict]`, `random-stray.md` `[stray]`. Fix-once-rerun-once UX — all three listed in one pass, not "fix the first then come back."
-  - `Halts: 3` line in summary.
+  - Summary line shows a halts count of **3** (the renderer prints `Halts:` followed by aligned whitespace then the number — match loosely on the count, not the spacing).
   - **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both unchanged.
 
 **Revert:** re-run V0 to re-import fresh. No Notion revert needed.
@@ -249,11 +249,11 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 - **Pass:**
   - Exit code **0** — soft-deleted is skip, not halt.
   - stdout does NOT contain `Halted:`.
-  - stdout shows `Pushed: 1` (Page 5 round-trip) and a summary line, NOT `"Nothing to push"` (gate ran).
+  - stdout shows a Pushed count of **1** (Page 5 round-trip) and a summary line, NOT `"Nothing to push"` (gate ran). The renderer aligns the `Pushed:` line with whitespace — match on the count, not the spacing.
   - **Notion MCP fetch** of Page 6: `Score` still **600**, all properties unchanged (skip path proven).
   - **Notion MCP fetch** of Page 5: `Score` still **500** (round-trip with no value drift).
 
-**Revert:** re-run V0 to re-import fresh.
+**Revert:** re-run V0 to re-import fresh. Note: V3's push bumps Page 5's Notion `last_edited_time` (the round-trip is a real write). The next V0 re-import realigns local timestamps, so this is harmless across runs — just don't be surprised if Page 5's `last_edited_time` keeps drifting forward across V3 invocations.
 
 ### Step V4: Malformed YAML halts (n21g)
 
@@ -287,16 +287,27 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 - **Pass:**
   - Exit code **0**
   - stdout does NOT contain `Halted:` — gate fully bypassed.
-  - stdout shows `Pushed: 2` (Page 2 + Page 3; the stray has no `notion-id` so `scanPushable` filters it).
+  - stdout shows a Pushed count of **2** (Page 2 + Page 3; the stray has no `notion-id` so `scanPushable` filters it). Match on the count, not the spacing.
   - **Notion MCP fetch** of Page 2: `Score` is now **2222**.
   - **Notion MCP fetch** of Page 3: `Score` is now **3333**.
 
-**Revert (mandatory — V5 actually wrote to Notion):**
-1. Restore Page 2's local `Score` → `200` and Page 3's local `Score` → `300`.
-2. Drop the stray `random-stray.md`.
-3. Restore `notion-last-edited` on Pages 2 & 3 (re-import or hand-fix). Either way, `notion-last-edited` must match Notion before the next push.
+**Revert (mandatory — V5 actually wrote to Notion).** Pick one branch and follow it in order — the two branches need different orderings because re-importing rewrites the entire `.md`, including any local Score edit.
+
+*Branch A — re-import (faster, recommended):*
+1. Drop the stray `random-stray.md`.
+2. Re-run V0 (`./notion-sync.exe import ...`). This pulls Notion's current state — Score `2222`/`3333` and matching `notion-last-edited` — into local Pages 2 & 3.
+3. Edit Page 2's local `Score` → `200` and Page 3's local `Score` → `300`. Timestamps already match Notion, so the gate will pass.
 4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes` (no `--force` — proves the gate clears now that local state is sane).
 5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+
+*Branch B — hand-fix (no re-import):*
+1. Restore Page 2's local `Score` → `200` and Page 3's local `Score` → `300`.
+2. Drop the stray `random-stray.md`.
+3. Hand-edit Page 2's & Page 3's `notion-last-edited` to match Notion's current `last_edited_time` (fetch via Notion MCP). Required for the gate to clear without `--force`.
+4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`.
+5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+
+⚠️ Don't mix branches — restoring Score first and then re-importing in step 3 will overwrite your Score edit and round-trip `2222`/`3333` to Notion on the next push.
 
 ## Phase 3 — Cell-level push (TODO — added by phase 3 PR)
 
