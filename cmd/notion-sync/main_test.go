@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -332,6 +333,61 @@ func TestCLI_Push_Yes_PassesGate(t *testing.T) {
 	}
 	if !strings.Contains(s, "Pushing properties to Notion...") {
 		t.Errorf("expected push flow to start past the gate, got:\n%s", s)
+	}
+}
+
+// renderHaltedResult formats the user-visible halt summary the CLI prints
+// when the validation gate aborts. Pins the exact output shape so a refactor
+// that breaks the "Halted:" header, drops the [class] label, mangles the
+// inspected/halts counts, or stops base-naming the halt path trips this test.
+// The full subprocess CLI test can't reach this code path (the dummy API key
+// dies on schema fetch before the gate fires) — extracting + testing the
+// renderer directly is the path that actually pins the contract.
+func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
+	halts := []sync.FileClassification{
+		{Path: "/tmp/folder/page-2.md", Class: sync.ClassHaltConflict, Reason: "row changed on Notion since last sync"},
+		{Path: "/tmp/folder/stray.md", Class: sync.ClassHaltUnexpected, Reason: "no notion-id in frontmatter"},
+	}
+	// Total intentionally != len(Halts): pins that the header reads from
+	// result.Total (full inspected count), not from len(Halts).
+	result := &sync.PushResult{
+		Title:  "Test DB",
+		Total:  4,
+		Halted: true,
+		Halts:  halts,
+	}
+	var buf bytes.Buffer
+	renderHaltedResult(result, &buf)
+	out := buf.String()
+
+	// Header: title quoted, inspected count from result.Total (NOT len(Halts)),
+	// halts count + the "nothing pushed" hint.
+	if !strings.Contains(out, `Halted: "Test DB"`) {
+		t.Errorf("expected quoted title in 'Halted:' header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Inspected: 4") {
+		t.Errorf("expected 'Inspected: 4' (from result.Total), got:\n%s", out)
+	}
+	if !strings.Contains(out, "Halts:     2 (nothing pushed") {
+		t.Errorf("expected halts count + 'nothing pushed' hint, got:\n%s", out)
+	}
+
+	// Per-halt lines: basename only (not full path), [haltClassLabel], reason
+	// from the input fixture (matched against the fixture, not a hardcoded
+	// slice — keeps this test from breaking when validation.go reword the
+	// real reason text). Two different classes prove the haltClassLabel
+	// mapping is wired — if the switch breaks, both labels fall through to
+	// "halt" and these miss.
+	for _, h := range halts {
+		want := fmt.Sprintf("%s [%s] — %s", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
+		if !strings.Contains(out, want) {
+			t.Errorf("expected halt line %q, got:\n%s", want, out)
+		}
+	}
+	// Full path must NOT appear — basename only, otherwise output bloats with
+	// the user's tmp paths.
+	if strings.Contains(out, "/tmp/folder/page-2.md") {
+		t.Errorf("expected basename only in halt line, got full path in:\n%s", out)
 	}
 }
 
