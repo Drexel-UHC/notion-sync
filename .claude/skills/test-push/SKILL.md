@@ -203,7 +203,7 @@ Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./t
 
 ### Step V1: Single conflict halts the run (n21d)
 
-Edit Page 2's local `.md` (`Push- Conflict Subject A.md`): change `notion-last-edited` to `2020-01-01T00:00:00Z` (definitively stale). Don't touch any property values.
+Edit Page 2's local `.md` (`35957008-e885-811d-ae4b-eb73607cc037.md`): change `notion-last-edited` to `2020-01-01T00:00:00Z` (definitively stale). Don't touch any property values.
 
 Isolate to Page 2: delete every other page's `.md` so the gate halts on Page 2 alone. Keep `_database.json` and `AGENTS.md`.
 
@@ -222,7 +222,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 Re-run V0 if needed for a clean folder. Then:
 
 1. Stale-stamp Page 2's `notion-last-edited` → `2020-01-01T00:00:00Z`.
-2. Stale-stamp Page 3's (`Push- Conflict Subject B.md`) `notion-last-edited` → `2020-01-01T00:00:00Z`.
+2. Stale-stamp Page 3's (`35957008-e885-8141-9e44-ef7c58e4a487.md`) `notion-last-edited` → `2020-01-01T00:00:00Z`.
 3. Drop a `random-stray.md` in the folder with no frontmatter (just `# stray` body).
 4. Delete every other page's `.md` (including Page 4 — critical) so the gate sees exactly Page 2 + Page 3 + the stray.
 
@@ -259,7 +259,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 Re-run V0. Then:
 
-1. Corrupt Page 7's local `.md` (`Push- Null Edges.md`): introduce an unclosed quoted string in the frontmatter (e.g. change a property value to `"unclosed`).
+1. Corrupt Page 7's local `.md` (`35957008-e885-814f-9f19-c401d454b08d.md`): introduce an unclosed quoted string in the frontmatter (e.g. change a property value to `"unclosed`).
 2. Delete every other page's `.md` (Page 4 critical) so the folder has only the broken Page 7.
 
 Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`

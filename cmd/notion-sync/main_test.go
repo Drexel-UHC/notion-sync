@@ -372,14 +372,18 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 		t.Errorf("expected halts count + 'nothing pushed' hint, got:\n%s", out)
 	}
 
-	// Per-halt lines: basename only (not full path), [haltClassLabel], reason
-	// from the input fixture (matched against the fixture, not a hardcoded
-	// slice — keeps this test from breaking when validation.go reword the
-	// real reason text). Two different classes prove the haltClassLabel
-	// mapping is wired — if the switch breaks, both labels fall through to
-	// "halt" and these miss.
-	for _, h := range halts {
-		want := fmt.Sprintf("%s [%s] — %s", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
+	// Per-halt lines: basename only (not full path), the literal [class] label,
+	// and the reason from the input fixture (matched against the fixture, not a
+	// hardcoded reason slice — keeps this test from breaking when validation.go
+	// rewords the real reason text). The labels are pinned LITERALLY ([conflict],
+	// [stray]) rather than via haltClassLabel(h.Class): asserting against the same
+	// function the renderer calls would be a tautology — if the switch regressed
+	// to return "halt" for every class, both the rendered line and the expectation
+	// would read [halt] and still match. Literal labels make a broken
+	// haltClassLabel switch actually trip this test.
+	wantLabels := []string{"conflict", "stray"} // halts[0]=ClassHaltConflict, halts[1]=ClassHaltUnexpected
+	for i, h := range halts {
+		want := fmt.Sprintf("%s [%s] — %s", filepath.Base(h.Path), wantLabels[i], h.Reason)
 		if !strings.Contains(out, want) {
 			t.Errorf("expected halt line %q, got:\n%s", want, out)
 		}
