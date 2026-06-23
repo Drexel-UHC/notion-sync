@@ -134,6 +134,8 @@ internal/
 
 ## Development
 
+New contributor on a fresh clone? See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites and setup.
+
 ```sh
 go build ./cmd/notion-sync   # Build binary
 ```
