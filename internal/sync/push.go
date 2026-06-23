@@ -45,9 +45,10 @@ func BuildPushQueue(folderPath string) (*PushPreview, error) {
 	if metadata == nil {
 		return nil, fmt.Errorf("no %s found in %s. Use 'import' to import the database first", DatabaseMetadataFile, folderPath)
 	}
-	// nil client → network-free local classification. Conflict / Unreachable
-	// can't surface here (they need a GetPage); they wait for the gate.
-	report, err := classifyFolder(folderPath, nil)
+	// nil client + nil schema → network-free local classification. Conflict /
+	// Unreachable / InvalidOption can't surface here (they need a GetPage or the
+	// fetched schema); they wait for the gate.
+	report, err := classifyFolder(folderPath, nil, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +110,12 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 	// skipped entirely (existing escape hatch). Both the halt list and the
 	// push queue derive from this one report — no second folder walk.
 	gateClient := opts.Client
+	gateSchema := schema
 	if opts.Force {
 		gateClient = nil
+		gateSchema = nil
 	}
-	report, err := classifyFolder(opts.FolderPath, gateClient)
+	report, err := classifyFolder(opts.FolderPath, gateClient, gateSchema, opts.AllowNewOptions)
 	if err != nil {
 		return nil, err
 	}

@@ -15,10 +15,24 @@ type Database struct {
 }
 
 // DatabaseProperty represents a property schema entry in a database.
+//
+// Select / MultiSelect / Status carry the schema's allowed-option lists so push
+// can validate pushed values against them before any write (issue #90). Notion
+// returns these on GET /data_sources/{id}; they're nil for any other type.
 type DatabaseProperty struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Type        string        `json:"type"`
+	Select      *SelectConfig `json:"select,omitempty"`
+	MultiSelect *SelectConfig `json:"multi_select,omitempty"`
+	Status      *SelectConfig `json:"status,omitempty"`
+}
+
+// SelectConfig holds the allowed-option list for a select / multi_select /
+// status property's schema. Reuses SelectValue for each option (id, name,
+// color match the schema's option shape).
+type SelectConfig struct {
+	Options []SelectValue `json:"options"`
 }
 
 // DataSource represents a data source reference within a database.

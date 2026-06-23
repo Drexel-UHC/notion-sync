@@ -70,10 +70,11 @@ const (
 
 // PushOptions contains options for pushing local frontmatter changes to Notion.
 type PushOptions struct {
-	Client     NotionClient
-	FolderPath string
-	Force      bool // skip conflict check
-	DryRun     bool // report planned changes without writing
+	Client          NotionClient
+	FolderPath      string
+	Force           bool // skip conflict check
+	DryRun          bool // report planned changes without writing
+	AllowNewOptions bool // let unknown select/multi_select values auto-create options in Notion (status still validated)
 }
 
 // PushPreview is what the phase-1 confirmation gate displays to the user

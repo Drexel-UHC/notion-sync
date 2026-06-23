@@ -8,7 +8,7 @@ var usage = `notion-sync — Sync Notion databases and pages to Markdown (v` + v
 Usage:
   notion-sync import <database-or-page-id> [--output <folder>] [--api-key <key>] [--keep-presigned-params]
   notion-sync refresh <folder> [--ids id1,id2] [--force] [--api-key <key>] [--keep-presigned-params]
-  notion-sync push <folder> [--force] [--dry-run] [--yes] [--api-key <key>]
+  notion-sync push <folder> [--force] [--dry-run] [--yes] [--allow-new-options] [--api-key <key>]
   notion-sync list [<output-folder>]
   notion-sync clean <folder> [--dry-run]
   notion-sync agents-md <folder>
@@ -27,12 +27,16 @@ Commands:
             Previews the push queue and prompts y/N before any API write (TTY only).
             Non-interactive runs (CI / pipes) must pass --yes; otherwise the run is cancelled.
             Runs a validation gate before any write: stray .md, malformed YAML, conflicting
-            timestamps, or unreachable rows halt the entire run (all-or-nothing).
+            timestamps, unreachable rows, or invalid select/status/multi_select options halt
+            the entire run (all-or-nothing).
             --force, -f    Skip the validation gate entirely. Pushes despite conflicts,
                            strays, malformed YAML, unreadable files, or unreachable rows.
                            Use only after manual review — overwrites Notion-side changes.
             --dry-run      Show what would be pushed without writing to Notion (still reads from Notion for conflict detection)
             --yes, -y      Skip the confirmation prompt (required in non-interactive runs)
+            --allow-new-options  Let unknown select/multi_select values auto-create options in
+                                 Notion's shared schema. Unknown status values still halt (the
+                                 API cannot create status options). Default: unknown options halt.
   list      List all synced databases and pages in a folder
   clean     Strip AWS S3 pre-signed query strings from existing .md files in a folder.
             Useful one-time backfill after upgrading. No API calls.

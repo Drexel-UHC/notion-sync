@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
+	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
 // Classification is a single file's outcome from the validation pass (DAG n21).
@@ -14,14 +16,15 @@ import (
 type Classification int
 
 const (
-	ClassSkipAgentsMD    Classification = iota // n21a — generated guide, not a row
-	ClassSkipDeleted                           // n21b — already soft-deleted
-	ClassReady                                 // n21c — linked, timestamps match
-	ClassHaltConflict                          // n21d — Notion edited since last sync
-	ClassHaltUnexpected                        // n21e — unlinked, not AGENTS.md
-	ClassHaltUnreachable                       // n21f — Notion unreachable during read
-	ClassHaltMalformed                         // n21g — YAML frontmatter could not be parsed
-	ClassHaltUnreadable                        // n21h — file could not be read from disk
+	ClassSkipAgentsMD      Classification = iota // n21a — generated guide, not a row
+	ClassSkipDeleted                             // n21b — already soft-deleted
+	ClassReady                                   // n21c — linked, timestamps match
+	ClassHaltConflict                            // n21d — Notion edited since last sync
+	ClassHaltUnexpected                          // n21e — unlinked, not AGENTS.md
+	ClassHaltUnreachable                         // n21f — Notion unreachable during read
+	ClassHaltMalformed                           // n21g — YAML frontmatter could not be parsed
+	ClassHaltUnreadable                          // n21h — file could not be read from disk
+	ClassHaltInvalidOption                       // n21i — select/status/multi_select value not in schema options
 )
 
 // IsHalt returns true for any halt-class value.
@@ -30,7 +33,8 @@ func (c Classification) IsHalt() bool {
 		c == ClassHaltUnexpected ||
 		c == ClassHaltUnreachable ||
 		c == ClassHaltMalformed ||
-		c == ClassHaltUnreadable
+		c == ClassHaltUnreadable ||
+		c == ClassHaltInvalidOption
 }
 
 // isLocalHalt reports whether a halt class is detectable from disk alone,
@@ -85,7 +89,7 @@ type ValidationReport struct {
 // Thin wrapper over classifyFolder — the single walk that also backs
 // BuildPushQueue (preview) and the per-row push queue (#80).
 func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationReport, error) {
-	return classifyFolder(folderPath, client)
+	return classifyFolder(folderPath, client, nil, false)
 }
 
 // classifyFolder is the single classifier walk behind every push folder scan
@@ -105,9 +109,18 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 //     timestamps), Conflict (Notion moved ahead), or Unreachable (GetPage
 //     failed).
 //
+// When schema is non-nil (the gate path) each linked row's select/status/
+// multi_select values are checked against the schema's allowed options before
+// the conflict GetPage — an unknown value halts the run (ClassHaltInvalidOption)
+// before any write, preventing typo-driven schema pollution and mid-run 422s
+// (issue #90). Network-free callers (preview, --force) pass a nil schema and
+// skip the check. allowNewOptions relaxes select/multi_select (Notion will
+// auto-create the option on push); status always validates (the API can't
+// create status options).
+//
 // Halted flips on any halt-class outcome, in lockstep with the appends, so it
 // can never drift out of sync with the underlying classifications.
-func classifyFolder(folderPath string, client NotionClient) (*ValidationReport, error) {
+func classifyFolder(folderPath string, client NotionClient, schema map[string]notion.DatabaseProperty, allowNewOptions bool) (*ValidationReport, error) {
 	dirEntries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("read folder: %w", err)
@@ -185,6 +198,25 @@ func classifyFolder(folderPath string, client NotionClient) (*ValidationReport, 
 			continue
 		}
 
+		// Schema-based option validation (issue #90). An unknown select/
+		// multi_select value would silently auto-create a junk option in the
+		// shared schema; an unknown status value would 422 mid-run. Catch both
+		// here — local string compare against the fetched schema, before the
+		// conflict GetPage — so the whole run halts before any write. Only the
+		// gate supplies a schema; preview / --force pass nil and skip it.
+		if schema != nil {
+			if reason, ok := validateRowOptions(fm, schema, allowNewOptions); !ok {
+				add(FileClassification{
+					Path:     fullPath,
+					Class:    ClassHaltInvalidOption,
+					NotionID: notionID,
+					fm:       fm,
+					Reason:   reason,
+				})
+				continue
+			}
+		}
+
 		// Linked, not deleted, parseable. Network-free callers (preview,
 		// --force) stop here: the row is ready as far as disk can tell. The
 		// gate will resolve conflicts when a client is supplied.
@@ -232,4 +264,88 @@ func classifyFolder(folderPath string, client NotionClient) (*ValidationReport, 
 		})
 	}
 	return report, nil
+}
+
+// validateRowOptions checks every select / status / multi_select value in a
+// row's frontmatter against the schema's allowed options (issue #90). It
+// returns ok=false plus a user-facing reason listing all violations in the row
+// (sorted for deterministic output) when any value is unknown.
+//
+// The select/status asymmetry mirrors Notion's API: select and multi_select
+// options can be auto-created on write, so allowNewOptions lets a genuinely-new
+// category through; status options cannot be created via API, so an unknown
+// status always halts regardless of the flag.
+//
+// Empty/nil scalar values mean "clear the property" and are never invalid.
+func validateRowOptions(fm map[string]interface{}, schema map[string]notion.DatabaseProperty, allowNewOptions bool) (string, bool) {
+	var violations []string
+	for key, prop := range schema {
+		val, present := fm[key]
+		if !present {
+			continue
+		}
+		switch prop.Type {
+		case "select":
+			if allowNewOptions || prop.Select == nil {
+				continue
+			}
+			name := coerceString(val)
+			if name == "" {
+				continue
+			}
+			if !optionAllowed(prop.Select.Options, name) {
+				violations = append(violations, invalidOptionReason(key, name, prop.Select.Options))
+			}
+		case "status":
+			// No opt-in: Notion's API cannot create status options.
+			if prop.Status == nil {
+				continue
+			}
+			name := coerceString(val)
+			if name == "" {
+				continue
+			}
+			if !optionAllowed(prop.Status.Options, name) {
+				violations = append(violations, invalidOptionReason(key, name, prop.Status.Options))
+			}
+		case "multi_select":
+			if allowNewOptions || prop.MultiSelect == nil {
+				continue
+			}
+			for _, name := range coerceStringSlice(val) {
+				if name == "" {
+					continue
+				}
+				if !optionAllowed(prop.MultiSelect.Options, name) {
+					violations = append(violations, invalidOptionReason(key, name, prop.MultiSelect.Options))
+				}
+			}
+		}
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		return strings.Join(violations, "; "), false
+	}
+	return "", true
+}
+
+// optionAllowed reports whether name exactly matches one of the schema options.
+// Match is case-sensitive: Notion treats "Done" and "done" as distinct options.
+func optionAllowed(options []notion.SelectValue, name string) bool {
+	for _, o := range options {
+		if o.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// invalidOptionReason formats the halt reason for an unknown option value,
+// listing the allowed options in schema (Notion display) order.
+func invalidOptionReason(prop, value string, options []notion.SelectValue) string {
+	names := make([]string, 0, len(options))
+	for _, o := range options {
+		names = append(names, o.Name)
+	}
+	return fmt.Sprintf("%q is not a valid option for %q (allowed: %s)", value, prop, strings.Join(names, ", "))
 }

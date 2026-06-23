@@ -1155,6 +1155,274 @@ func TestPushDatabase_ForceBypassesAllHaltClasses(t *testing.T) {
 	}
 }
 
+// --- Option validation gate (issue #90) ---
+
+// Acceptance: a typo'd select value (which would otherwise make Notion
+// auto-create a junk option in the shared schema) halts the whole run, writes
+// nothing, and surfaces the file in result.Halts with the allowed-options reason.
+func TestPushDatabase_TypoSelectHaltsRun(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"Status: Doen\n" + // typo of "Done"
+		"---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Doing", "Done"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("invalid option is surfaced via result.Halted, not err: %v", err)
+	}
+	if !result.Halted {
+		t.Fatal("expected result.Halted=true for typo'd select option")
+	}
+	if len(client.updateRequests) != 0 {
+		t.Errorf("expected 0 UpdatePage calls when halted, got %d", len(client.updateRequests))
+	}
+	if len(result.Halts) != 1 || result.Halts[0].Class != ClassHaltInvalidOption {
+		t.Fatalf("expected 1 ClassHaltInvalidOption halt, got %v", result.Halts)
+	}
+	reason := result.Halts[0].Reason
+	if !strings.Contains(reason, "Doen") || !strings.Contains(reason, "Status") || !strings.Contains(reason, "To Do, Doing, Done") {
+		t.Errorf("halt reason must name the bad value, property, and allowed options, got %q", reason)
+	}
+}
+
+// Acceptance: an unknown status value halts (no 422 ever reaches Notion). Status
+// options cannot be created via API, so there is no opt-in.
+func TestPushDatabase_UnknownStatusHaltsRun(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"Stage: Shppd\n" +
+		"---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Stage": optionProp("status", "Backlog", "In Progress", "Shipped"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	// Even with --allow-new-options, status must still halt.
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, AllowNewOptions: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Halted {
+		t.Fatal("expected halt on unknown status even with AllowNewOptions=true")
+	}
+	if len(client.updateRequests) != 0 {
+		t.Errorf("expected 0 UpdatePage calls, got %d", len(client.updateRequests))
+	}
+	if len(result.Halts) != 1 || result.Halts[0].Class != ClassHaltInvalidOption {
+		t.Errorf("expected 1 ClassHaltInvalidOption, got %v", result.Halts)
+	}
+}
+
+// Acceptance: --allow-new-options lets an unknown select value through so Notion
+// auto-creates the option on write.
+func TestPushDatabase_AllowNewOptionsPassesUnknownSelect(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"Status: Brand New Category\n" +
+		"---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Done"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, AllowNewOptions: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Halted {
+		t.Fatal("AllowNewOptions must not halt on unknown select")
+	}
+	if result.Pushed != 1 {
+		t.Errorf("expected 1 pushed, got %d (errors=%v)", result.Pushed, result.Errors)
+	}
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected 1 UpdatePage call, got %d", len(client.updateRequests))
+	}
+	sel := client.updateRequests[0].Properties["Status"].(map[string]interface{})["select"].(map[string]interface{})
+	if sel["name"] != "Brand New Category" {
+		t.Errorf("expected new option name passed through, got %v", sel["name"])
+	}
+}
+
+// Valid select / status / multi_select values push unchanged through the gate.
+func TestPushDatabase_ValidOptionsPushUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"Status: Done\n" +
+		"Stage: Shipped\n" +
+		"Tags:\n  - urgent\n  - backlog\n" +
+		"---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Doing", "Done"),
+			"Stage":  optionProp("status", "Backlog", "Shipped"),
+			"Tags":   optionProp("multi_select", "urgent", "backlog", "later"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Halted {
+		t.Fatalf("valid options must not halt, got halts %v", result.Halts)
+	}
+	if result.Pushed != 1 {
+		t.Errorf("expected 1 pushed, got %d (errors=%v)", result.Pushed, result.Errors)
+	}
+}
+
+// All-or-nothing: one invalid option blocks the whole run, including a sibling
+// row whose options are all valid — nothing is written.
+func TestPushDatabase_OneInvalidOptionBlocksValidSibling(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"good.md": "---\nnotion-id: page-good\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"bad.md":  "---\nnotion-id: page-bad\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Doen\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Doing", "Done"),
+		},
+	}
+	client.pages["page-good"] = &notion.Page{ID: "page-good", LastEditedTime: "2024-01-01T00:00:00Z"}
+	client.pages["page-bad"] = &notion.Page{ID: "page-bad", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Halted {
+		t.Fatal("one invalid option must halt the whole run")
+	}
+	if len(client.updateRequests) != 0 {
+		t.Errorf("expected 0 UpdatePage calls (no partial push), got %d", len(client.updateRequests))
+	}
+}
+
+// Option validation works when the schema is sourced from the data source
+// endpoint (the production multi-data-source path), not just GetDatabase.
+func TestPushDatabase_InvalidOptionFromDataSourceSchema(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMetaWithDataSource(t, dir, "db-001", "ds-001")
+
+	md := "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Doen\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.dataSources["ds-001"] = &notion.DataSourceDetail{
+		ID: "ds-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Done"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Halted || len(result.Halts) != 1 || result.Halts[0].Class != ClassHaltInvalidOption {
+		t.Errorf("expected ClassHaltInvalidOption from data-source schema, got halted=%v halts=%v", result.Halted, result.Halts)
+	}
+}
+
+// --force bypasses the option gate too (yolo escape hatch): an invalid option
+// is not caught and the write is attempted. Pins that --force skips option
+// validation alongside the other halt classes.
+func TestPushDatabase_ForceBypassesOptionGate(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Doen\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status": optionProp("select", "To Do", "Done"),
+		},
+	}
+	client.pages["page-001"] = &notion.Page{ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, Force: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Halted {
+		t.Error("--force must skip the option gate (Halted=false)")
+	}
+	if len(client.updateRequests) != 1 {
+		t.Errorf("expected 1 UpdatePage call under --force, got %d", len(client.updateRequests))
+	}
+}
+
 // writeDatabaseMeta writes a minimal _database.json for tests.
 func writeDatabaseMeta(t *testing.T, dir, dbID string) {
 	t.Helper()

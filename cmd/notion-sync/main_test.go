@@ -347,12 +347,13 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 	halts := []sync.FileClassification{
 		{Path: "/tmp/folder/page-2.md", Class: sync.ClassHaltConflict, Reason: "row changed on Notion since last sync"},
 		{Path: "/tmp/folder/stray.md", Class: sync.ClassHaltUnexpected, Reason: "no notion-id in frontmatter"},
+		{Path: "/tmp/folder/badopt.md", Class: sync.ClassHaltInvalidOption, Reason: `"Doen" is not a valid option for "Status" (allowed: To Do, Doing, Done)`},
 	}
 	// Total intentionally != len(Halts): pins that the header reads from
 	// result.Total (full inspected count), not from len(Halts).
 	result := &sync.PushResult{
 		Title:  "Test DB",
-		Total:  4,
+		Total:  5,
 		Halted: true,
 		Halts:  halts,
 	}
@@ -365,10 +366,10 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 	if !strings.Contains(out, `Halted: "Test DB"`) {
 		t.Errorf("expected quoted title in 'Halted:' header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Inspected: 4") {
-		t.Errorf("expected 'Inspected: 4' (from result.Total), got:\n%s", out)
+	if !strings.Contains(out, "Inspected: 5") {
+		t.Errorf("expected 'Inspected: 5' (from result.Total), got:\n%s", out)
 	}
-	if !strings.Contains(out, "Halts:     2 (nothing pushed") {
+	if !strings.Contains(out, "Halts:     3 (nothing pushed") {
 		t.Errorf("expected halts count + 'nothing pushed' hint, got:\n%s", out)
 	}
 
@@ -381,7 +382,7 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 	// to return "halt" for every class, both the rendered line and the expectation
 	// would read [halt] and still match. Literal labels make a broken
 	// haltClassLabel switch actually trip this test.
-	wantLabels := []string{"conflict", "stray"} // halts[0]=ClassHaltConflict, halts[1]=ClassHaltUnexpected
+	wantLabels := []string{"conflict", "stray", "invalid-option"} // matches halts[] classes in order
 	for i, h := range halts {
 		want := fmt.Sprintf("%s [%s] — %s", filepath.Base(h.Path), wantLabels[i], h.Reason)
 		if !strings.Contains(out, want) {
