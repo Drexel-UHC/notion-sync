@@ -112,7 +112,7 @@ flowchart LR
 
     subgraph Report[4\. Run summary — agent-readable structured output]
         direction LR
-        n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted / cancelled<br/>per status rules in header.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted (validation or auth).<br/><br/>Agents parse this to decide next action.]
+        n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted / cancelled<br/>per status rules in header.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted — validation or auth.<br/><br/>Agents parse this to decide next action.]
     end
 
     %% Phase handoffs (explicit node-to-node)
