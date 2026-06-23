@@ -394,6 +394,77 @@ func TestValidate_n21h_UnreadableFileClassifiedAsHaltUnreadable(t *testing.T) {
 	}
 }
 
+// #80 — classifyFolder is the single walk behind the gate, the preview, and
+// the push queue. With a nil client it must run network-free: every locally
+// clean linked row classifies ClassReady WITHOUT a GetPage, even when Notion
+// would actually be a conflict. Passing a literal nil client proves there is
+// no network call — any GetPage would panic on the nil interface. This is the
+// view BuildPushQueue (preview) and PushDatabase (--force) both consume.
+func TestClassifyFolder_NilClient_LinkedRowsReadyWithoutNetwork(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// One linked row, one stray, one malformed, one AGENTS.md, one deleted.
+	files := map[string]string{
+		"linked.md":    "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"stray.md":     "---\ntitle: stray\n---\n",
+		"malformed.md": "---\nnotion-id: \"unclosed\nStatus: Done\n---\n",
+		"AGENTS.md":    "# guide\n",
+		"deleted.md":   "---\nnotion-id: page-del\nnotion-deleted: true\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Nil client: a GetPage would panic, so a passing run proves none happened.
+	report, err := classifyFolder(dir, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := map[string]FileClassification{}
+	for _, f := range report.Files {
+		got[filepath.Base(f.Path)] = f
+	}
+
+	// Linked row is Ready without any network check, and carries its parsed
+	// frontmatter so the push loop can build a payload from the same report.
+	linked := got["linked.md"]
+	if linked.Class != ClassReady {
+		t.Errorf("linked.md: expected ClassReady (network-free), got %v", linked.Class)
+	}
+	if linked.NotionID != "page-001" {
+		t.Errorf("linked.md: expected NotionID page-001, got %q", linked.NotionID)
+	}
+	if linked.fm["Status"] != "Done" {
+		t.Errorf("linked.md: expected carried frontmatter Status=Done, got %v", linked.fm["Status"])
+	}
+
+	// Local halts still classify; the deleted row and AGENTS.md still skip.
+	if got["stray.md"].Class != ClassHaltUnexpected {
+		t.Errorf("stray.md: expected ClassHaltUnexpected, got %v", got["stray.md"].Class)
+	}
+	if got["malformed.md"].Class != ClassHaltMalformed {
+		t.Errorf("malformed.md: expected ClassHaltMalformed, got %v", got["malformed.md"].Class)
+	}
+	if got["AGENTS.md"].Class != ClassSkipAgentsMD {
+		t.Errorf("AGENTS.md: expected ClassSkipAgentsMD, got %v", got["AGENTS.md"].Class)
+	}
+	if got["deleted.md"].Class != ClassSkipDeleted {
+		t.Errorf("deleted.md: expected ClassSkipDeleted, got %v", got["deleted.md"].Class)
+	}
+
+	// isLocalHalt feeds BuildPushQueue.LocalHalts — network halts are excluded.
+	if !ClassHaltUnexpected.isLocalHalt() || !ClassHaltMalformed.isLocalHalt() || !ClassHaltUnreadable.isLocalHalt() {
+		t.Error("Unexpected/Malformed/Unreadable must be local halts")
+	}
+	if ClassHaltConflict.isLocalHalt() || ClassHaltUnreachable.isLocalHalt() {
+		t.Error("Conflict/Unreachable require a network call — must not be local halts")
+	}
+}
+
 // Defensive case-insensitive AGENTS.md match: on Windows / default-config
 // macOS the file may land as agents.md or Agents.md. Misclassifying it as
 // a stray would halt the run for filesystem casing alone.

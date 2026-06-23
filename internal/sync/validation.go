@@ -33,6 +33,17 @@ func (c Classification) IsHalt() bool {
 		c == ClassHaltUnreadable
 }
 
+// isLocalHalt reports whether a halt class is detectable from disk alone,
+// with no Notion API call. Conflict and Unreachable both require a GetPage,
+// so the preview (BuildPushQueue) can't predict them — they're excluded.
+// This is the filter that turns the single classifier walk's report into
+// PushPreview.LocalHalts.
+func (c Classification) isLocalHalt() bool {
+	return c == ClassHaltUnexpected ||
+		c == ClassHaltMalformed ||
+		c == ClassHaltUnreadable
+}
+
 // FileClassification is one file's row in the validation report.
 //
 // NotionID is populated whenever the file declares one in frontmatter
@@ -45,6 +56,14 @@ type FileClassification struct {
 	Class    Classification
 	Reason   string // populated for halts; user-facing
 	NotionID string
+
+	// fm is the parsed frontmatter, carried so the push loop can build its
+	// property payload from a ClassReady row without re-reading and
+	// re-parsing the file. Unexported: an internal carry for the single-walk
+	// refactor (#80), not part of the report's public contract. Populated for
+	// the linked rows (Ready, Conflict, Unreachable, Deleted); nil for
+	// AGENTS.md, Unreadable, Malformed, and Unexpected.
+	fm map[string]interface{}
 }
 
 // ValidationReport is the result of n21+n22 across every file in folderPath.
@@ -62,17 +81,39 @@ type ValidationReport struct {
 // caller. PushDatabase does that check before invoking the gate; direct
 // callers must do the same or accept that the report says nothing about
 // whether the folder is a real synced database.
+//
+// Thin wrapper over classifyFolder — the single walk that also backs
+// BuildPushQueue (preview) and the per-row push queue (#80).
 func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationReport, error) {
+	return classifyFolder(folderPath, client)
+}
+
+// classifyFolder is the single classifier walk behind every push folder scan
+// (#80): the validation gate, the confirmation preview, and the per-row push
+// queue all derive from one report instead of three near-duplicate walks that
+// drifted apart on AGENTS.md casing, IO-error policy, and deleted ordering.
+//
+// It reads each .md once and applies the shared local filter: AGENTS.md skip,
+// IO error → Unreadable, parse error → Malformed, notion-deleted → Deleted,
+// missing notion-id → Unexpected. For a locally-clean linked row the behavior
+// forks on client:
+//
+//   - client == nil — the network-free view. The row is marked ClassReady
+//     without contacting Notion. BuildPushQueue uses this for its preview, and
+//     PushDatabase uses it under --force (which deliberately skips the gate).
+//   - client != nil — the gate. A GetPage resolves the row into Ready (matched
+//     timestamps), Conflict (Notion moved ahead), or Unreachable (GetPage
+//     failed).
+//
+// Halted flips on any halt-class outcome, in lockstep with the appends, so it
+// can never drift out of sync with the underlying classifications.
+func classifyFolder(folderPath string, client NotionClient) (*ValidationReport, error) {
 	dirEntries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("read folder: %w", err)
 	}
 
 	report := &ValidationReport{}
-	// add appends a classification and flips Halted in lockstep, so Halted
-	// can never drift out of sync with the underlying classifications. The
-	// rule is centralized here (not at every call site) — one bug-fix
-	// surface, no missed assignments.
 	add := func(fc FileClassification) {
 		report.Files = append(report.Files, fc)
 		if fc.Class.IsHalt() {
@@ -129,6 +170,7 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 				Path:     fullPath,
 				Class:    ClassSkipDeleted,
 				NotionID: notionID,
+				fm:       fm,
 			})
 			continue
 		}
@@ -139,6 +181,19 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 				Path:   fullPath,
 				Class:  ClassHaltUnexpected,
 				Reason: "file has no notion-id and is not AGENTS.md — does not belong to this synced folder",
+			})
+			continue
+		}
+
+		// Linked, not deleted, parseable. Network-free callers (preview,
+		// --force) stop here: the row is ready as far as disk can tell. The
+		// gate will resolve conflicts when a client is supplied.
+		if client == nil {
+			add(FileClassification{
+				Path:     fullPath,
+				Class:    ClassReady,
+				NotionID: notionID,
+				fm:       fm,
 			})
 			continue
 		}
@@ -150,6 +205,7 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 				Path:     fullPath,
 				Class:    ClassHaltUnreachable,
 				NotionID: notionID,
+				fm:       fm,
 				Reason:   fmt.Sprintf("could not read Notion last_edited_time: %v", err),
 			})
 			continue
@@ -159,6 +215,7 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 				Path:     fullPath,
 				Class:    ClassReady,
 				NotionID: notionID,
+				fm:       fm,
 			})
 			continue
 		}
@@ -167,6 +224,7 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 			Path:     fullPath,
 			Class:    ClassHaltConflict,
 			NotionID: notionID,
+			fm:       fm,
 			Reason: fmt.Sprintf(
 				"Notion's row has changed since last sync (local %s, Notion %s) — refresh before pushing",
 				localLastEdited, page.LastEditedTime,
@@ -174,65 +232,4 @@ func ValidatePushQueue(client NotionClient, folderPath string) (*ValidationRepor
 		})
 	}
 	return report, nil
-}
-
-// scanLocalHalts walks folderPath and returns the halt-class files that
-// can be detected without any Notion API call: ClassHaltUnexpected (stray
-// .md missing notion-id) and ClassHaltMalformed (corrupt YAML frontmatter).
-//
-// Used by BuildPushQueue so the phase-1 confirmation preview can warn the
-// user about locally-detectable halts before they consent. Without this,
-// the user confirms a queue, validation halts on a stray they were never
-// shown, and they get the fix-loop UX phase 2's halt enumerator was meant
-// to avoid. Network-dependent halts (Conflict, Unreachable) still only
-// surface at the validation gate — by definition we can't predict them
-// from disk alone.
-func scanLocalHalts(folderPath string) ([]FileClassification, error) {
-	dirEntries, err := os.ReadDir(folderPath)
-	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
-	}
-	var halts []FileClassification
-	for _, entry := range dirEntries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		if strings.EqualFold(entry.Name(), "AGENTS.md") {
-			continue
-		}
-		fullPath := filepath.Join(folderPath, entry.Name())
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			halts = append(halts, FileClassification{
-				Path:   fullPath,
-				Class:  ClassHaltUnreadable,
-				Reason: fmt.Sprintf("could not read file: %v", err),
-			})
-			continue
-		}
-		fm, parseErr := frontmatter.Parse(string(content))
-		if parseErr != nil {
-			halts = append(halts, FileClassification{
-				Path:   fullPath,
-				Class:  ClassHaltMalformed,
-				Reason: fmt.Sprintf("could not parse YAML frontmatter: %v", parseErr),
-			})
-			continue
-		}
-		if fm == nil {
-			fm = map[string]interface{}{}
-		}
-		if deleted, _ := fm["notion-deleted"].(bool); deleted {
-			continue
-		}
-		notionID, hasID := fm["notion-id"].(string)
-		if !hasID || notionID == "" {
-			halts = append(halts, FileClassification{
-				Path:   fullPath,
-				Class:  ClassHaltUnexpected,
-				Reason: "file has no notion-id and is not AGENTS.md — does not belong to this synced folder",
-			})
-		}
-	}
-	return halts, nil
 }
