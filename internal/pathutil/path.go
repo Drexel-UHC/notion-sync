@@ -1,5 +1,5 @@
-// Package util provides filesystem helpers like filename sanitization.
-package util
+// Package pathutil provides filesystem helpers like filename sanitization.
+package pathutil
 
 import (
 	"regexp"

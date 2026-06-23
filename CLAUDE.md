@@ -100,7 +100,7 @@ internal/
 ├── config/
 │   ├── config.go             # Config file, env vars, key priority
 │   └── keyring.go            # go-keyring wrapper
-└── util/
+└── pathutil/
     ├── path.go               # SanitizeFileName, JoinPath
     └── path_test.go
 ```

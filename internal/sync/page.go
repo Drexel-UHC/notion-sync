@@ -11,7 +11,7 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
-	"github.com/ran-codes/notion-sync/internal/util"
+	"github.com/ran-codes/notion-sync/internal/pathutil"
 )
 
 // FreezePageOptions contains options for freezing a page.
@@ -45,7 +45,7 @@ func FreezePage(opts FreezePageOptions) (*PageFreezeResult, error) {
 		filePath = filepath.Join(opts.OutputFolder, opts.NotionID+".md")
 	} else {
 		// Standalone page: keep title-based filename
-		safeName := util.SanitizeFileName(title)
+		safeName := pathutil.SanitizeFileName(title)
 		if safeName == "" {
 			safeName = "Untitled"
 		}
@@ -158,7 +158,7 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 	}
 
 	title := getPageTitle(page)
-	safeName := util.SanitizeFileName(title)
+	safeName := pathutil.SanitizeFileName(title)
 	if safeName == "" {
 		safeName = "Untitled"
 	}

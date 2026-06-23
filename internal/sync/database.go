@@ -12,7 +12,7 @@ import (
 	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
-	"github.com/ran-codes/notion-sync/internal/util"
+	"github.com/ran-codes/notion-sync/internal/pathutil"
 )
 
 // DatabaseImportOptions contains options for importing a database.
@@ -67,7 +67,7 @@ func resolveDataSources(client NotionClient, database *notion.Database, dbTitle,
 		if dsTitle == "" {
 			dsTitle = "Data Source " + ds.ID[:8]
 		}
-		safeDSName := util.SanitizeFileName(dsTitle)
+		safeDSName := pathutil.SanitizeFileName(dsTitle)
 		sources = append(sources, dataSourceInfo{
 			ID:         ds.ID,
 			Title:      dsTitle,
@@ -93,7 +93,7 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 	if dbTitle == "" {
 		dbTitle = "Untitled Database"
 	}
-	safeName := util.SanitizeFileName(dbTitle)
+	safeName := pathutil.SanitizeFileName(dbTitle)
 	folderPath := filepath.Join(opts.OutputFolder, safeName)
 
 	// Create folder
