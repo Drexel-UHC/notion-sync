@@ -104,8 +104,9 @@ The push command iterates **every** `.md` file in the folder and sends each one'
 
 **Phase 1 only needs Page 1.** Delete the other six pages' `.md` files so the push queue contains exactly the canary:
 
-- Keep: `Push- Canary.md` (the `:` in `Push: Canary` is sanitized to `-` on import)
-- Delete: every other `.md` file in `./test-output/push-e2e/notion-sync-test-database-push/`
+- **Filename convention:** the importer writes `.md` files named `<notion-id>.md` (e.g. `35957008-e885-813a-886b-cbb6dd7c1598.md`), NOT title-derived names. Every "edit Page X's `.md`" step below means "edit the file whose name matches Page X's notion-id from the `setup.md` fixture table."
+- Keep: `35957008-e885-813a-886b-cbb6dd7c1598.md` (Page 1 — Canary)
+- Delete: the six `.md` files for Pages 2–7 (notion-ids in `setup.md`)
 - Don't touch: `_database.json`, `AGENTS.md`
 
 Verify: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run` should show `Push queue (1 file)` listing only the canary.
@@ -172,12 +173,141 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 ---
 
-## Phase 2 — Validation halts (TODO — added by phase 2 PR)
+## Phase 2 — Validation halts (DAG n21 series → n22a)
 
-When phase 2 lands (n21 series + n22a halt aggregation), this section gets steps `V1`...`Vn`. Expected coverage:
-- Multi-file conflict aggregation: every halt reason listed, **nothing** pushed.
-- Single conflict halts the run (current behavior is per-row partial — phase 2 changes this).
-- Non-row file types (AGENTS.md, notion-deleted) classified correctly.
+The validation gate classifies every `.md` against 8 outcomes (n21a–h). Any halt-class file aborts the **entire** run before any Notion write — all-or-nothing. `--force` bypasses the entire gate.
+
+**🚨 NEVER push Page 4 in this phase.** Same rule as Phase 1 — Page 4's rich-text annotations are the phase-3 fixture. Every V step below either operates on a single page's `.md` (Pages 2 / 3 / 6 / 7) or explicitly excludes Page 4 from the folder. If you can't guarantee Page 4 is excluded, stop and re-run Step 1 (clean slate).
+
+**Halt → exit 1.** A halted run prints `Halted: "<title>"` and an enumerated halt list to stdout, plus `push halted by validation gate (N halt(s))` to stderr, and exits **1**. Cancel (Phase 1) is exit 0; halt is exit 1. Don't conflate them.
+
+**Filename quick reference** (from `setup.md`; importer writes `<notion-id>.md`):
+
+| Page | notion-id (filename without `.md`) |
+|---|---|
+| 1 — Canary | `35957008-e885-813a-886b-cbb6dd7c1598` |
+| 2 — Conflict A | `35957008-e885-811d-ae4b-eb73607cc037` |
+| 3 — Conflict B | `35957008-e885-8141-9e44-ef7c58e4a487` |
+| 4 — Formatting (NEVER touch) | `35957008-e885-8192-ab0f-c75e6a011b10` |
+| 5 — Cell-Level | `35957008-e885-815e-8e73-ea79c22f96d4` |
+| 6 — Soft Deleted | `35957008-e885-81e0-83c1-ff9fb4dbfda5` |
+| 7 — Null Edges | `35957008-e885-814f-9f19-c401d454b08d` |
+
+### Step V0: Re-import for Phase 2
+
+Phase 1's Step 4 deleted Pages 2–7 from disk. Phase 2 needs them back.
+
+Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./test-output/push-e2e`
+
+- **Pass:** all 7 `.md` files present in `./test-output/push-e2e/notion-sync-test-database-push/`. `_database.json` and `AGENTS.md` also present.
+
+### Step V1: Single conflict halts the run (n21d)
+
+Edit Page 2's local `.md` (`35957008-e885-811d-ae4b-eb73607cc037.md`): change `notion-last-edited` to `2020-01-01T00:00:00Z` (definitively stale). Don't touch any property values.
+
+Isolate to Page 2: delete every other page's `.md` so the gate halts on Page 2 alone. Keep `_database.json` and `AGENTS.md`.
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit code **1**
+  - stdout contains `Halted:` and `[conflict]`
+  - stderr contains `push halted by validation gate`
+  - **Notion MCP fetch** of Page 2: `Score` is still **200** (canonical from `setup.md`), proving no UpdatePage fired.
+
+**Revert local edit:** restore Page 2's `notion-last-edited` to its pre-edit value (or just re-run V0 to re-import fresh). No Notion revert needed — nothing was written.
+
+### Step V2: Multi-halt aggregation (n22a)
+
+Re-run V0 if needed for a clean folder. Then:
+
+1. Stale-stamp Page 2's `notion-last-edited` → `2020-01-01T00:00:00Z`.
+2. Stale-stamp Page 3's (`35957008-e885-8141-9e44-ef7c58e4a487.md`) `notion-last-edited` → `2020-01-01T00:00:00Z`.
+3. Drop a `random-stray.md` in the folder with no frontmatter (just `# stray` body).
+4. Delete every other page's `.md` (including Page 4 — critical) so the gate sees exactly Page 2 + Page 3 + the stray.
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit code **1**
+  - stdout enumerates **3 halts**: Page 2 `[conflict]`, Page 3 `[conflict]`, `random-stray.md` `[stray]`. Fix-once-rerun-once UX — all three listed in one pass, not "fix the first then come back."
+  - Summary line shows a halts count of **3** (the renderer prints `Halts:` followed by aligned whitespace then the number — match loosely on the count, not the spacing).
+  - **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both unchanged.
+
+**Revert:** re-run V0 to re-import fresh. No Notion revert needed.
+
+### Step V3: Soft-deleted skip (n21b)
+
+Re-run V0. Then:
+
+1. Edit Page 6's local `.md`: add `notion-deleted: true` to its frontmatter.
+2. Keep Page 5's `.md` alongside Page 6 — without a non-deleted file, the queue ends up empty and the CLI short-circuits with `"Nothing to push: no synced .md files in folder."` *before* the validation gate fires (so n21b never gets exercised). Page 5 is the safest neighbor: clean by default, not the phase-3 fixture, and pushing it round-trips its current canonical values without drift.
+3. Delete the other 5 pages' `.md` (Page 4 critical) so the folder has Pages 5 + 6 only.
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit code **0** — soft-deleted is skip, not halt.
+  - stdout does NOT contain `Halted:`.
+  - stdout shows a Pushed count of **1** (Page 5 round-trip) and a summary line, NOT `"Nothing to push"` (gate ran). The renderer aligns the `Pushed:` line with whitespace — match on the count, not the spacing.
+  - **Notion MCP fetch** of Page 6: `Score` still **600**, all properties unchanged (skip path proven).
+  - **Notion MCP fetch** of Page 5: `Score` still **500** (round-trip with no value drift).
+
+**Revert:** re-run V0 to re-import fresh. Note: V3's push bumps Page 5's Notion `last_edited_time` (the round-trip is a real write). The next V0 re-import realigns local timestamps, so this is harmless across runs — just don't be surprised if Page 5's `last_edited_time` keeps drifting forward across V3 invocations.
+
+### Step V4: Malformed YAML halts (n21g)
+
+Re-run V0. Then:
+
+1. Corrupt Page 7's local `.md` (`35957008-e885-814f-9f19-c401d454b08d.md`): introduce an unclosed quoted string in the frontmatter (e.g. change a property value to `"unclosed`).
+2. Delete every other page's `.md` (Page 4 critical) so the folder has only the broken Page 7.
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit code **1**
+  - stdout contains `Halted:` and `[malformed]`
+  - The halt's reason mentions `YAML` (so the user knows to fix frontmatter, not hunt for a stray).
+  - **Notion MCP fetch** of Page 7: unchanged (whatever its canonical state was).
+
+**Revert:** re-run V0 to re-import fresh.
+
+### Step V5: `--force` bypasses every halt class
+
+Re-run V0. Then build the worst-case mixed folder:
+
+1. Stale-stamp Page 2's `notion-last-edited` → `2020-01-01T00:00:00Z` (would trigger n21d).
+2. Stale-stamp Page 3's `notion-last-edited` → `2020-01-01T00:00:00Z` (would trigger n21d).
+3. Drop `random-stray.md` with no frontmatter (would trigger n21e).
+4. Edit Page 2's `Score` locally → `2222` and Page 3's `Score` locally → `3333` (the actual writes we expect to land).
+5. Delete every other page's `.md` (Page 4 **critical** — `--force` would otherwise push it and clobber phase-3's formatting fixture).
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes --force`
+
+- **Pass:**
+  - Exit code **0**
+  - stdout does NOT contain `Halted:` — gate fully bypassed.
+  - stdout shows a Pushed count of **2** (Page 2 + Page 3; the stray has no `notion-id` so `scanPushable` filters it). Match on the count, not the spacing.
+  - **Notion MCP fetch** of Page 2: `Score` is now **2222**.
+  - **Notion MCP fetch** of Page 3: `Score` is now **3333**.
+
+**Revert (mandatory — V5 actually wrote to Notion).** Pick one branch and follow it in order — the two branches need different orderings because re-importing rewrites the entire `.md`, including any local Score edit.
+
+*Branch A — re-import (faster, recommended):*
+1. Drop the stray `random-stray.md`.
+2. Re-run V0 (`./notion-sync.exe import ...`). This pulls Notion's current state — Score `2222`/`3333` and matching `notion-last-edited` — into local Pages 2 & 3.
+3. Edit Page 2's local `Score` → `200` and Page 3's local `Score` → `300`. Timestamps already match Notion, so the gate will pass.
+4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes` (no `--force` — proves the gate clears now that local state is sane).
+5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+
+*Branch B — hand-fix (no re-import):*
+1. Restore Page 2's local `Score` → `200` and Page 3's local `Score` → `300`.
+2. Drop the stray `random-stray.md`.
+3. Hand-edit Page 2's & Page 3's `notion-last-edited` to match Notion's current `last_edited_time` (fetch via Notion MCP). Required for the gate to clear without `--force`.
+4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`.
+5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+
+⚠️ Don't mix branches — restoring Score first and then re-importing in step 3 will overwrite your Score edit and round-trip `2222`/`3333` to Notion on the next push.
 
 ## Phase 3 — Cell-level push (TODO — added by phase 3 PR)
 
@@ -200,9 +330,9 @@ Steps `S1`...`Sn`. Expected coverage:
 
 ### Step F1: Final state verification
 
-Notion MCP fetch of the canary page. Compare against **the canonical Step 3 table values hardcoded in this skill** — NOT just the run's own Step 3 fetch. Within-run-only comparison is unsafe: if a prior run left the fixture drifted, a fresh Step 3 fetch records the drifted state and F1 then "matches" itself, silently passing while the bug persists. F1's job is to detect drift against the source-of-truth canonical, full stop.
+Notion MCP fetch of **every page touched by the run** — Pages 1–7 once any phase 2+ step has executed. Compare against **the canonical values hardcoded in `setup.md`** (per-page property tables) — NOT just the run's own Step 3 fetch. Within-run-only comparison is unsafe: if a prior run left a fixture drifted, a fresh Step 3 fetch records the drifted state and F1 then "matches" itself, silently passing while the bug persists. F1's job is to detect drift against the source-of-truth canonical, full stop.
 
-For each canonical property in the Step 3 table:
+**Phase 1 minimum — Page 1 (canary):**
 
 | Property | Canonical value | Notion shape to assert |
 |---|---|---|
@@ -211,6 +341,8 @@ For each canonical property in the Step 3 table:
 | `Category` | `Research` | `select.name` == canonical |
 | `Score` | `100` | `number` == canonical |
 | `Due Date` | `2026-06-01` (date-only) | `date.start` == canonical AND `is_datetime` == `0`/`false` |
+
+**Phase 2 additions — re-fetch Pages 2, 3, 6, 7 against `setup.md` canonicals.** V1/V2 stale-stamp Pages 2 & 3 (must end at `Score` 200 / 300). V3 marks Page 6 deleted in the local file only (Notion-side `Score` 600 must be untouched). V4 corrupts Page 7's local YAML (Notion-side unchanged). V5 actually writes to Notion — its mandatory revert step must restore Page 2 → 200 and Page 3 → 300 before F1 runs. Don't duplicate the canonical values here — read them from `setup.md`'s per-page sections (Pages 2/3/6/7).
 
 If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
 
@@ -243,7 +375,13 @@ Print a summary table:
 | G2   | --yes proceeds, Notion updated          | PASS   |
 | G3   | Revert via push --yes                   | PASS   |
 | G4   | --dry-run skips gate, Notion untouched  | PASS   |
-| F1   | Final state matches snapshot            | PASS   |
+| V0   | Re-import for Phase 2                   | PASS   |
+| V1   | Single conflict halts (n21d)            | PASS   |
+| V2   | Multi-halt aggregation (n22a)           | PASS   |
+| V3   | Soft-deleted skip (n21b)                | PASS   |
+| V4   | Malformed YAML halts (n21g)             | PASS   |
+| V5   | --force bypasses every halt class       | PASS   |
+| F1   | Final state matches canonical (1–7)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```
 

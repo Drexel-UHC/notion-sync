@@ -488,6 +488,65 @@ func TestPushDatabase_ForcePushesTitleRenameOverConflict(t *testing.T) {
 	}
 }
 
+// n22a integration — when the validation gate halts (any halt-class file),
+// PushDatabase must abort BEFORE any UpdatePage call, even for the rows that
+// classified clean. This is the all-or-nothing contract that phase 2 introduces.
+func TestPushDatabase_ValidationHaltAbortsRun_NoUpdatePageCalls(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// One ready file + one stray (n21e halt) + one conflict (n21d halt).
+	// All three classified in one pass; the run must NOT push the ready one.
+	files := map[string]string{
+		"ready.md":      "---\nnotion-id: page-ready\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"stray.md":      "---\ntitle: stray\n---\n",
+		"conflict.md":   "---\nnotion-id: page-conflict\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-ready"] = &notion.Page{ID: "page-ready", LastEditedTime: "2024-01-01T00:00:00Z"}
+	client.pages["page-conflict"] = &notion.Page{ID: "page-conflict", LastEditedTime: "2024-06-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("validation halt is not an error return; surfaced via result.Halted: %v", err)
+	}
+
+	if !result.Halted {
+		t.Fatal("expected result.Halted=true when validation surfaces any halt")
+	}
+	if len(client.updateRequests) != 0 {
+		t.Errorf("expected 0 UpdatePage calls when halted, got %d", len(client.updateRequests))
+	}
+	if result.Pushed != 0 {
+		t.Errorf("expected 0 pushed when halted, got %d", result.Pushed)
+	}
+
+	// Both halts must be enumerated — fix-once-rerun-once UX, not fix-loop.
+	gotHalts := map[string]Classification{}
+	for _, h := range result.Halts {
+		gotHalts[filepath.Base(h.Path)] = h.Class
+	}
+	if gotHalts["stray.md"] != ClassHaltUnexpected {
+		t.Errorf("stray.md: expected ClassHaltUnexpected, got %v", gotHalts["stray.md"])
+	}
+	if gotHalts["conflict.md"] != ClassHaltConflict {
+		t.Errorf("conflict.md: expected ClassHaltConflict, got %v", gotHalts["conflict.md"])
+	}
+}
+
+// n21d → n22a — a single conflicting row halts the entire run (no
+// best-effort push of other rows). Phase 2 contract: validation is
+// all-or-nothing.
 func TestPushDatabase_DetectsConflict(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")
@@ -519,8 +578,11 @@ func TestPushDatabase_DetectsConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if result.Conflicts != 1 {
-		t.Errorf("expected 1 conflict, got %d", result.Conflicts)
+	if !result.Halted {
+		t.Error("expected result.Halted=true on conflict (phase 2 gate)")
+	}
+	if len(result.Halts) != 1 || result.Halts[0].Class != ClassHaltConflict {
+		t.Errorf("expected 1 ClassHaltConflict in Halts, got %v", result.Halts)
 	}
 	if len(client.updateRequests) != 0 {
 		t.Error("expected no UpdatePage calls on conflict")
@@ -834,20 +896,26 @@ func TestBuildPushQueue_IncludesLinkedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 1 {
-		t.Fatalf("expected 1 file, got %d (%v)", len(queue), queue)
+	if len(preview.Queue) != 1 {
+		t.Fatalf("expected 1 file, got %d (%v)", len(preview.Queue), preview.Queue)
 	}
-	if filepath.Base(queue[0]) != "page-001.md" {
-		t.Errorf("expected page-001.md, got %s", queue[0])
+	if filepath.Base(preview.Queue[0]) != "page-001.md" {
+		t.Errorf("expected page-001.md, got %s", preview.Queue[0])
+	}
+	if len(preview.LocalHalts) != 0 {
+		t.Errorf("expected no local halts on a clean queue, got %v", preview.LocalHalts)
 	}
 }
 
-// AGENTS.md (no notion-id) and arbitrary unlinked files must be excluded —
-// the queue is "rows we'd push to Notion," and these aren't rows.
+// AGENTS.md (no notion-id) is excluded from the queue and silently. A
+// stray .md without notion-id is also excluded from the queue but surfaces
+// in LocalHalts so the confirmation prompt can warn the user before they
+// consent — otherwise the validation gate would halt on a file the user
+// was never shown (fix-loop UX).
 func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")
@@ -859,12 +927,58 @@ func TestBuildPushQueue_SkipsFilesWithoutNotionID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Errorf("expected empty queue, got %v", queue)
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected empty queue, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 1 {
+		t.Fatalf("expected stray.md to surface as a local halt, got %v", preview.LocalHalts)
+	}
+	got := preview.LocalHalts[0]
+	if filepath.Base(got.Path) != "stray.md" {
+		t.Errorf("expected stray.md in local halts, got %s", got.Path)
+	}
+	if got.Class != ClassHaltUnexpected {
+		t.Errorf("expected ClassHaltUnexpected, got %v", got.Class)
+	}
+	if got.Reason == "" {
+		t.Error("local halts must populate Reason for the user")
+	}
+}
+
+// Malformed YAML is a locally-detectable halt — surfaces in LocalHalts so
+// the confirmation prompt warns before the validation gate halts on it.
+// Reason must mention YAML parsing, not "no notion-id" (that would send
+// the user hunting for a stray file when the issue is corrupt frontmatter).
+func TestBuildPushQueue_MalformedYAMLSurfacesAsLocalHalt(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	// Unclosed quote → yaml.Unmarshal returns an error.
+	bad := "---\nnotion-id: \"unclosed\nStatus: Done\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), []byte(bad), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := BuildPushQueue(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected empty queue, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 1 {
+		t.Fatalf("expected 1 local halt for malformed YAML, got %v", preview.LocalHalts)
+	}
+	got := preview.LocalHalts[0]
+	if got.Class != ClassHaltMalformed {
+		t.Errorf("expected ClassHaltMalformed, got %v", got.Class)
+	}
+	if !strings.Contains(got.Reason, "YAML") && !strings.Contains(got.Reason, "yaml") {
+		t.Errorf("expected reason to mention YAML, got %q", got.Reason)
 	}
 }
 
@@ -877,12 +991,15 @@ func TestBuildPushQueue_SkipsDeletedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Errorf("expected deleted entry to be skipped, got %v", queue)
+	if len(preview.Queue) != 0 {
+		t.Errorf("expected deleted entry to be skipped, got %v", preview.Queue)
+	}
+	if len(preview.LocalHalts) != 0 {
+		t.Errorf("deleted entries are not halts, got %v", preview.LocalHalts)
 	}
 }
 
@@ -903,22 +1020,24 @@ func TestBuildPushQueue_ErrorsWhenMetadataMissing(t *testing.T) {
 	}
 }
 
-// Parity contract: the gate's preview must equal the action. BuildPushQueue
-// (preview) and PushDatabase (action) both call scanPushable, so this test
-// pins the invariant — if anyone re-introduces a divergent filter, this
-// fails.
+// Parity contract: the preview must agree with the action. BuildPushQueue
+// (preview) and PushDatabase (action) both call scanPushable for the queue,
+// and BuildPushQueue.LocalHalts uses the same notion-id rule the validation
+// gate uses for ClassHaltUnexpected — so a stray file that halts the run
+// is the same stray file the user saw at confirmation time. This test
+// pins both invariants: queue parity over skip cases, halt parity over
+// stray cases.
 func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")
 
 	// Mix of pushable + every kind of non-pushable file the filter should
-	// exclude. If the two code paths disagree on any of these, the gate is
-	// a lie.
+	// exclude, plus a stray that the gate will halt on.
 	files := map[string]string{
 		"keep-001.md":      "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
 		"keep-002.md":      "---\nnotion-id: page-002\nnotion-last-edited: 2024-01-01T00:00:00Z\nnotion-database-id: db-001\n---\n",
 		"AGENTS.md":        "# Guide for downstream agents\n",
-		"no-notion-id.md":  "---\ntitle: stray\n---\n",
+		"stray.md":         "---\ntitle: stray\n---\n",
 		"deleted.md":       "---\nnotion-id: page-deleted\nnotion-deleted: true\n---\n",
 		"not-markdown.txt": "ignored",
 	}
@@ -928,7 +1047,7 @@ func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 		}
 	}
 
-	queue, err := BuildPushQueue(dir)
+	preview, err := BuildPushQueue(dir)
 	if err != nil {
 		t.Fatalf("BuildPushQueue: %v", err)
 	}
@@ -948,22 +1067,91 @@ func TestBuildPushQueue_AndPushDatabase_AgreeOnFileSet(t *testing.T) {
 		t.Fatalf("PushDatabase: %v", err)
 	}
 
-	if result.Total != len(queue) {
-		t.Fatalf("preview/action divergence: BuildPushQueue=%d PushDatabase.Total=%d", len(queue), result.Total)
+	// Action halts on stray.md; preview must surface it too.
+	if !result.Halted {
+		t.Fatalf("expected validation to halt on stray.md")
 	}
-	queueBasenames := make(map[string]bool, len(queue))
-	for _, p := range queue {
+	if len(preview.LocalHalts) != 1 || filepath.Base(preview.LocalHalts[0].Path) != "stray.md" {
+		t.Errorf("preview must surface stray.md as a local halt, got %v", preview.LocalHalts)
+	}
+	// Halt-class parity: every local halt must show up as a halt in the
+	// gate's report (the action). If the preview warns about a stray and
+	// the gate doesn't halt on it, the warning is a lie.
+	gateHaltPaths := map[string]bool{}
+	for _, h := range result.Halts {
+		gateHaltPaths[filepath.Base(h.Path)] = true
+	}
+	for _, h := range preview.LocalHalts {
+		if !gateHaltPaths[filepath.Base(h.Path)] {
+			t.Errorf("preview/gate divergence: %s in LocalHalts but not in PushResult.Halts", filepath.Base(h.Path))
+		}
+	}
+
+	// Queue parity over the non-halt cases.
+	queueBasenames := make(map[string]bool, len(preview.Queue))
+	for _, p := range preview.Queue {
 		queueBasenames[filepath.Base(p)] = true
 	}
 	for _, want := range []string{"keep-001.md", "keep-002.md"} {
 		if !queueBasenames[want] {
-			t.Errorf("queue missing %s; got %v", want, queue)
+			t.Errorf("queue missing %s; got %v", want, preview.Queue)
 		}
 	}
-	for _, exclude := range []string{"AGENTS.md", "no-notion-id.md", "deleted.md", "not-markdown.txt"} {
+	for _, exclude := range []string{"AGENTS.md", "stray.md", "deleted.md", "not-markdown.txt"} {
 		if queueBasenames[exclude] {
-			t.Errorf("queue should not include %s; got %v", exclude, queue)
+			t.Errorf("queue should not include %s; got %v", exclude, preview.Queue)
 		}
+	}
+}
+
+// --force bypasses the entire validation gate, not just conflict detection.
+// A folder containing every halt class (stray, malformed YAML, conflict)
+// alongside a clean row must still push the linked rows under --force, with
+// Halted=false and zero entries in result.Halts. Pins the expanded escape-
+// hatch semantics so a future tightening (e.g. "force only bypasses
+// conflicts") can't silently break callers who rely on yolo mode.
+func TestPushDatabase_ForceBypassesAllHaltClasses(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"ready.md":     "---\nnotion-id: page-ready\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"conflict.md":  "---\nnotion-id: page-conflict\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
+		"stray.md":     "---\ntitle: stray\n---\n",
+		"malformed.md": "---\nnotion-id: \"unclosed\nStatus: Done\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-ready"] = &notion.Page{ID: "page-ready", LastEditedTime: "2024-01-01T00:00:00Z"}
+	// Notion's timestamp is newer — would be n21d under the gate, force must override.
+	client.pages["page-conflict"] = &notion.Page{ID: "page-conflict", LastEditedTime: "2024-06-01T00:00:00Z"}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir, Force: true}, nil)
+	if err != nil {
+		t.Fatalf("force push must not error on halt-class fixtures: %v", err)
+	}
+	if result.Halted {
+		t.Error("--force must skip the validation gate (Halted=false)")
+	}
+	if len(result.Halts) != 0 {
+		t.Errorf("--force must produce no Halts entries, got %v", result.Halts)
+	}
+	// Both linked rows push; stray and malformed are filtered by scanPushable
+	// (no notion-id / unparseable), not by the gate.
+	if len(client.updateRequests) != 2 {
+		t.Errorf("expected 2 UpdatePage calls under --force (ready + conflict), got %d", len(client.updateRequests))
+	}
+	if result.Pushed != 2 {
+		t.Errorf("expected Pushed=2 under --force, got %d", result.Pushed)
 	}
 }
 
