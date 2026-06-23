@@ -419,7 +419,7 @@ func TestClassifyFolder_NilClient_LinkedRowsReadyWithoutNetwork(t *testing.T) {
 	}
 
 	// Nil client: a GetPage would panic, so a passing run proves none happened.
-	report, err := classifyFolder(dir, nil)
+	report, err := classifyFolder(dir, nil, nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

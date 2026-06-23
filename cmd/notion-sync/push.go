@@ -84,6 +84,7 @@ func runPush(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "Show what would be pushed without writing to Notion")
 	yes := fs.Bool("yes", false, "Skip the confirmation prompt (required for non-interactive runs)")
 	yesShort := fs.Bool("y", false, "Skip the confirmation prompt (shorthand)")
+	allowNewOptions := fs.Bool("allow-new-options", false, "Let unknown select/multi_select values auto-create options in Notion (status values are always validated)")
 
 	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
@@ -91,7 +92,7 @@ func runPush(args []string) error {
 
 	if fs.NArg() == 0 {
 		return fmt.Errorf("missing folder path\n" +
-			"Usage: notion-sync push <folder> [--force] [--dry-run] [--yes] [--api-key <key>]\n" +
+			"Usage: notion-sync push <folder> [--force] [--dry-run] [--yes] [--allow-new-options] [--api-key <key>]\n" +
 			"Example: notion-sync push ./notion/My\\ Database")
 	}
 
@@ -141,10 +142,11 @@ func runPush(args []string) error {
 	var dbTitle string
 
 	result, err := sync.PushDatabase(sync.PushOptions{
-		Client:     client,
-		FolderPath: folderPath,
-		Force:      forceFlag,
-		DryRun:     *dryRun,
+		Client:          client,
+		FolderPath:      folderPath,
+		Force:           forceFlag,
+		DryRun:          *dryRun,
+		AllowNewOptions: *allowNewOptions,
 	}, func(p sync.ProgressPhase) {
 		if p.Phase == sync.PhasePushing {
 			dbTitle = p.Title
@@ -232,6 +234,8 @@ func haltClassLabel(c sync.Classification) string {
 		return "malformed"
 	case sync.ClassHaltUnreadable:
 		return "unreadable"
+	case sync.ClassHaltInvalidOption:
+		return "invalid-option"
 	default:
 		return "halt"
 	}
