@@ -2,6 +2,9 @@
 %% ELI-PM: ideal flow after the push redesign epic lands.
 %% Four phases — user call (once), validation gate (all files first), push (per row), run summary.
 %% Numbering: phase.step[branch-letter]. Use these IDs to refer to specific substeps.
+%% Reconciled 2026-06-23 (PR #94): decision #1 (transient retry → HTTP client, delete
+%% phase 3d) and decision #2 (per-row TOCTOU re-verify fused with the diff fetch). See
+%% the two decision blocks below. NOTE: phase-2 backfill (n21g/n21h/n21i) still pending.
 %% --- Confirmation gate (n12b → n13 → n13a) ---
 %%   Push is the only command that writes to a shared system (Notion).
 %%   n12b shows the user the queue (file paths + count) before any API write.
@@ -14,11 +17,30 @@
 %%   notion-deleted: true     : frontmatter flag marking a soft-deleted row.
 %%   linked to Notion         : local file has a `notion-id` in frontmatter.
 %%   AGENTS.md                : generated downstream-agent guide; never a Notion row.
-%% --- LOUD failure semantics (used at n34c, n34e, n34g) ---
+%% --- LOUD failure semantics (used at n32c, n34c, n34e) ---
 %%   1. write a structured failure line to stderr (file path + reason + fix)
 %%   2. append entry to JSON `failed[]` (see schema below)
 %%   3. continue the row queue — do NOT abort the run
-%%   Per-row only (400 / 422). 401 / 403 is run-wide → see n34h (halts run).
+%%   Per-row: 400 / 422 schema, exhausted-transient, and mid-run race (n32c).
+%%   401 / 403 is run-wide → see n34h (halts run).
+%% --- Retry lives in the HTTP client, NOT the push loop (decision #1, PR #94) ---
+%%   Transient failures (429 / 5xx / network) are retried INSIDE the Notion HTTP
+%%   client: 5 attempts, exponential backoff, ±25% jitter, honors Retry-After.
+%%   The push loop never sees a still-retrying error — only the terminal outcome.
+%%   So at n34 push CLASSIFIES, it does not retry:
+%%     per-row 4xx (400 / 422) OR exhausted-transient → n34c (LOUD, continue)
+%%     auth 401 / 403                                 → n34h (HALT run)
+%%   This deletes the old push-level retry nodes (n34a / n34b) and the post-retry
+%%   verify+restamp branch (n34f / n34g / n35b / n36b — "phase 3d") entirely.
+%% --- Per-row TOCTOU re-verify, fused with the diff fetch (decision #2, PR #94) ---
+%%   The validation gate (phase 2) is an all-or-nothing PRE-flight, true only at
+%%   scan time. Across a long write loop that snapshot rots, and Notion has no
+%%   conditional write — the only clobber defense is read-timestamp-then-write
+%%   with a tight window. So the gate now STASHES each row's fetched page; n31
+%%   diffs against that snapshot; rows that actually change get one fresh re-fetch
+%%   at n32b right before writing (doubles as fresh diff input + TOCTOU guard).
+%%   A mid-run race → n32c (LOUD, continue): earlier rows are already written, so
+%%   all-or-nothing can't be restored here — the gate owns the pre-flight guarantee.
 %% --- Status rules (emitted at n41) ---
 %%   clean     : failed[] empty AND halted[] empty
 %%   partial   : failed[] non-empty AND halted[] empty
@@ -65,38 +87,32 @@ flowchart LR
 
     subgraph Push[3\. Push — per row, field-by-field]
         direction LR
-        n31[3.1 — Look at each field:<br/>did the user actually change it?] --> n32{3.2 — Did any<br/>field change?}
-        n32 -->|no| n32a[3.2a — Skip — nothing to push]
-        n32 -->|yes| n33[3.3 — Send ONLY the changed<br/>fields to Notion]
-        n33 --> n34{3.4 — Notion accepts<br/>the push?}
+        n31[3.1 — Diff each field: local frontmatter<br/>vs the row snapshot the gate already<br/>fetched. Which fields actually changed?] --> n32{3.2 — Did any<br/>field change?}
+        n32 -->|no| n32a[3.2a — Skip — nothing to push<br/>skippedNoOp]
+        n32 -->|yes| n32b{3.2b — TOCTOU guard: re-fetch this row<br/>fresh and re-diff. Still unchanged since<br/>the gate read it? Notion has no<br/>conditional write — this is the only<br/>clobber defense.}
+        n32b -->|no — raced:<br/>Notion moved ahead mid-run| n32c[3.2c — LOUD failure: row changed in<br/>Notion mid-run. Skip to avoid clobber;<br/>re-sync then retry. Continue-class, same<br/>as n34c. Earlier rows already written —<br/>all-or-nothing can't be restored here.]
+        n32b -->|yes — still clean| n33[3.3 — Send ONLY the changed<br/>fields to Notion]
+        n33 --> n34{3.4 — Notion accepts the push?<br/>terminal outcome — the HTTP client<br/>has already retried any transients}
 
         n34 -->|yes| n34d{3.4d — Verify pushed fields<br/>were stored correctly<br/>Notion's response value ==<br/>what we sent re-encoded}
         n34d -->|mismatch on a pushed field| n34e[3.4e — LOUD failure:<br/>Notion stored value differently<br/>than we sent. Show field name +<br/>sent vs stored. Investigate before<br/>next push.]
         n34d -->|all pushed fields match| n35a[3.5a — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
         n35a --> n36a[3.6a — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
 
-        n34 -->|no, transient<br/>429 / 5xx / network| n34a[3.4a — Transient failure detected]
-        n34 -->|no, per-row 4xx<br/>schema / validation<br/>400 or 422| n34c[3.4c — LOUD failure:<br/>show file path + Notion's error +<br/>what user/agent must fix<br/>before the next push run]
-        n34 -->|no, run-wide 4xx<br/>auth — 401 or 403| n34h[3.4h — HALT run — auth failed.<br/>Show error + fix.<br/>Subsequent rows skip the API call;<br/>the credential, not the row,<br/>is the failure.]
-        n34a --> n34b{3.4b — Retry 2 more times<br/>with delays<br/>e.g. 5s then 15s}
-        n34b -->|still failing| n34c
-        n34b -->|succeeds on retry| n34f{3.4f — Verify pushed fields<br/>were stored correctly<br/>same check as 3.4d}
-        n34f -->|mismatch on a pushed field| n34g[3.4g — LOUD failure:<br/>Notion stored value differently<br/>than we sent on retry. Show field +<br/>sent vs stored. Investigate before<br/>next push.]
-        n34f -->|all pushed fields match| n35b[3.5b — Re-query Notion for this row<br/>to read back its authoritative<br/>new last-edited time]
-        n35b --> n36b[3.6b — Write that exact timestamp<br/>into the local file.<br/>Local stamp == Notion now.]
+        n34 -->|no — per-row: 4xx 400/422 schema OR<br/>transient exhausted after the<br/>client's own retries| n34c[3.4c — LOUD failure:<br/>show file path + Notion's error +<br/>what user/agent must fix<br/>before the next push run]
+        n34 -->|no — run-wide 4xx<br/>auth — 401 or 403| n34h[3.4h — HALT run — auth failed.<br/>Show error + fix.<br/>Subsequent rows skip the API call;<br/>the credential, not the row,<br/>is the failure.]
 
         n32a --> n37{3.7 — More rows<br/>in queue?}
+        n32c --> n37
         n34c --> n37
         n34e --> n37
-        n34g --> n37
         n36a --> n37
-        n36b --> n37
         n37 -->|yes| n31
     end
 
     subgraph Report[4\. Run summary — agent-readable structured output]
         direction LR
-        n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted / cancelled<br/>per status rules in header.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted (validation or auth).<br/><br/>Agents parse this to decide next action.]
+        n41[4.1 — Emit run summary as JSON<br/>per schema in header comment.<br/>Status: clean / partial / halted / cancelled<br/>per status rules in header.<br/>Per-row entries for pushed,<br/>skipped no-op, skipped non-row,<br/>failed, halted — validation or auth.<br/><br/>Agents parse this to decide next action.]
     end
 
     %% Phase handoffs (explicit node-to-node)
