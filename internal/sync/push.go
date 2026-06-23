@@ -7,69 +7,36 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
-// pushableFile is a folder entry the push pipeline will act on: a .md file
-// linked to Notion (`notion-id` present) and not soft-deleted.
-type pushableFile struct {
-	path string
-	fm   map[string]interface{}
-}
-
-// scanPushable is the single source of truth for "what counts as pushable" —
-// both BuildPushQueue (preview) and PushDatabase (action) call it so the
-// confirmation gate's preview-equals-action contract holds by construction,
-// not by hand-keeping two filter loops in sync.
-func scanPushable(folderPath string) ([]pushableFile, error) {
-	dirEntries, err := os.ReadDir(folderPath)
-	if err != nil {
-		return nil, fmt.Errorf("read folder: %w", err)
+// readyQueue extracts the ClassReady rows from a classifier report (#80) —
+// the files PushDatabase will attempt to push. Deriving the queue from the
+// same report that produces the halts is what makes the preview-equals-action
+// contract hold by construction rather than by hand-keeping parallel filter
+// loops in sync.
+func readyQueue(report *ValidationReport) []FileClassification {
+	queue := make([]FileClassification, 0, len(report.Files))
+	for _, f := range report.Files {
+		if f.Class == ClassReady {
+			queue = append(queue, f)
+		}
 	}
-	var files []pushableFile
-	for _, entry := range dirEntries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-		filePath := filepath.Join(folderPath, entry.Name())
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			// Silent skip is correct here: the validation gate
-			// (ValidatePushQueue) and the preview's scanLocalHalts both
-			// classify unreadable files as ClassHaltUnreadable, so the user
-			// sees them in the halt list. Erroring here would short-circuit
-			// BuildPushQueue before scanLocalHalts runs and turn a nice halt
-			// list into a raw "read foo.md: permission denied" error.
-			// Under --force the gate is skipped — silent drop matches the
-			// rest of yolo mode (strays, malformed YAML also silently skip).
-			continue
-		}
-		fm, err := frontmatter.Parse(string(content))
-		if err != nil || fm == nil {
-			continue
-		}
-		if _, ok := fm["notion-id"].(string); !ok {
-			continue
-		}
-		if deleted, ok := fm["notion-deleted"].(bool); ok && deleted {
-			continue
-		}
-		files = append(files, pushableFile{path: filePath, fm: fm})
-	}
-	return files, nil
+	return queue
 }
 
 // BuildPushQueue returns the phase-1 confirmation preview: the .md files
 // PushDatabase would attempt to push, plus any halts detectable from disk
-// alone (stray .md, malformed YAML). Used by the confirmation gate (DAG
-// n12b) before any Notion API call.
+// alone (stray .md, malformed YAML, unreadable). Used by the confirmation
+// gate (DAG n12b) before any Notion API call.
 //
 // Errors if folderPath isn't a synced database so the user sees "not a
-// sync folder" rather than a misleading "nothing to push". Surfacing
-// LocalHalts here keeps the preview honest with the validation gate: if
-// strays exist, the user sees them at consent time instead of confirming
-// a queue and then getting halted on a file they were never shown.
+// sync folder" rather than a misleading "nothing to push". Both Queue and
+// LocalHalts come from one network-free classifyFolder walk: the queue is
+// its ClassReady rows, the halts are its locally-detectable halt rows. That
+// keeps the preview honest with the validation gate — if strays exist, the
+// user sees them at consent time instead of confirming a queue and then
+// getting halted on a file they were never shown.
 func BuildPushQueue(folderPath string) (*PushPreview, error) {
 	metadata, err := ReadDatabaseMetadata(folderPath)
 	if err != nil {
@@ -78,19 +45,22 @@ func BuildPushQueue(folderPath string) (*PushPreview, error) {
 	if metadata == nil {
 		return nil, fmt.Errorf("no %s found in %s. Use 'import' to import the database first", DatabaseMetadataFile, folderPath)
 	}
-	files, err := scanPushable(folderPath)
+	// nil client → network-free local classification. Conflict / Unreachable
+	// can't surface here (they need a GetPage); they wait for the gate.
+	report, err := classifyFolder(folderPath, nil)
 	if err != nil {
 		return nil, err
 	}
-	queue := make([]string, 0, len(files))
-	for _, f := range files {
-		queue = append(queue, f.path)
+	preview := &PushPreview{Queue: make([]string, 0, len(report.Files))}
+	for _, f := range report.Files {
+		switch {
+		case f.Class == ClassReady:
+			preview.Queue = append(preview.Queue, f.Path)
+		case f.Class.isLocalHalt():
+			preview.LocalHalts = append(preview.LocalHalts, f)
+		}
 	}
-	localHalts, err := scanLocalHalts(folderPath)
-	if err != nil {
-		return nil, err
-	}
-	return &PushPreview{Queue: queue, LocalHalts: localHalts}, nil
+	return preview, nil
 }
 
 // PushDatabase pushes local frontmatter property changes back to Notion.
@@ -134,36 +104,40 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		onProgress(ProgressPhase{Phase: PhasePushScanning})
 	}
 
-	// Validation gate (DAG n21+n22). All-or-nothing: any halt-class file
-	// across the whole folder aborts before any Notion write. --force skips
-	// the gate entirely (existing escape hatch, matches phase-1 behavior).
-	if !opts.Force {
-		report, err := ValidatePushQueue(opts.Client, opts.FolderPath)
-		if err != nil {
-			return nil, err
-		}
-		if report.Halted {
-			for _, f := range report.Files {
-				if f.Class.IsHalt() {
-					result.Halts = append(result.Halts, f)
-				}
-			}
-			result.Halted = true
-			// Total reflects everything classified, not just halts — gives
-			// the CLI summary "halted: 3 of 9 inspected" instead of the
-			// useless "Total: 0".
-			result.Total = len(report.Files)
-			if onProgress != nil {
-				onProgress(ProgressPhase{Phase: PhaseComplete})
-			}
-			return result, nil
-		}
+	// Single classifier walk (#80). Under the gate (!Force) the client
+	// resolves conflicts; under --force we run network-free so the gate is
+	// skipped entirely (existing escape hatch). Both the halt list and the
+	// push queue derive from this one report — no second folder walk.
+	gateClient := opts.Client
+	if opts.Force {
+		gateClient = nil
 	}
-
-	files, err := scanPushable(opts.FolderPath)
+	report, err := classifyFolder(opts.FolderPath, gateClient)
 	if err != nil {
 		return nil, err
 	}
+
+	// Validation gate (DAG n21+n22). All-or-nothing: any halt-class file
+	// across the whole folder aborts before any Notion write. --force ran the
+	// walk network-free, so report.Halted is false and this branch is skipped.
+	if !opts.Force && report.Halted {
+		for _, f := range report.Files {
+			if f.Class.IsHalt() {
+				result.Halts = append(result.Halts, f)
+			}
+		}
+		result.Halted = true
+		// Total reflects everything classified, not just halts — gives
+		// the CLI summary "halted: 3 of 9 inspected" instead of the
+		// useless "Total: 0".
+		result.Total = len(report.Files)
+		if onProgress != nil {
+			onProgress(ProgressPhase{Phase: PhaseComplete})
+		}
+		return result, nil
+	}
+
+	files := readyQueue(report)
 
 	result.Total = len(files)
 
@@ -172,7 +146,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			onProgress(ProgressPhase{Phase: PhasePushing, Current: i + 1, Total: result.Total, Title: metadata.Title})
 		}
 
-		notionID := f.fm["notion-id"].(string)
+		notionID := f.NotionID
 		localLastEdited, _ := f.fm["notion-last-edited"].(string)
 
 		// TOCTOU defense: the validation gate already covered the !Force
@@ -185,12 +159,12 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			page, err := opts.Client.GetPage(notionID)
 			if err != nil {
 				result.Failed++
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.path), err))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.Path), err))
 				continue
 			}
 			if !timestampsEqual(localLastEdited, page.LastEditedTime) {
 				result.Conflicts++
-				result.ConflictFiles = append(result.ConflictFiles, filepath.Base(f.path))
+				result.ConflictFiles = append(result.ConflictFiles, filepath.Base(f.Path))
 				continue
 			}
 			notionPage = page
@@ -200,7 +174,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		if len(validationErrs) > 0 {
 			result.Failed++
 			for _, e := range validationErrs {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", filepath.Base(f.path), e))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", filepath.Base(f.Path), e))
 			}
 			continue
 		}
@@ -217,7 +191,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		updated, err := opts.Client.UpdatePage(notionID, properties)
 		if err != nil {
 			result.Failed++
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.path), err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.Path), err))
 			continue
 		}
 
@@ -234,7 +208,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 				// Non-fatal: push succeeded; we just couldn't refetch the precise
 				// timestamp. Surface it so silent failures don't quietly reintroduce
 				// the quantized-timestamp bug this code exists to avoid.
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", filepath.Base(f.path), refetchErr))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", filepath.Base(f.Path), refetchErr))
 			}
 			if updated != nil && updated.LastEditedTime != "" {
 				newLastEdited = updated.LastEditedTime
@@ -244,9 +218,9 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		}
 
 		pushedAt := time.Now().UTC().Format(time.RFC3339)
-		if err := updateAfterPush(f.path, newLastEdited, pushedAt); err != nil {
+		if err := updateAfterPush(f.Path, newLastEdited, pushedAt); err != nil {
 			// Non-fatal: push succeeded, just couldn't update local timestamps.
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: update timestamps: %v", filepath.Base(f.path), err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: update timestamps: %v", filepath.Base(f.Path), err))
 		}
 
 		result.Pushed++
