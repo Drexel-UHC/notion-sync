@@ -20,6 +20,7 @@ When the user says "the agent docs" or asks about downstream documentation, they
   - **Minimize tool calls.** Use Grep, Read, Glob directly — they're fast and parallel. Never spawn a Task agent (subagent) for simple file reads or searches.
   - **No heavyweight agents for simple operations.** If a skill just needs to read/grep a handful of files, do it inline. If you think a Task agent is needed, ask me first.
 - Refer to context7 first if have any questions about claude code, notion mcp or github cli
+- **Markdown staging area: `.context/.tmp/`.** Scratch/temp markdown — PR/issue bodies for `gh --body-file`, drafts, intermediate notes — goes in `.context/.tmp/` (gitignored, never shows in `git status` / GitHub Desktop). **Never** stage scratch in `.claude/`, `.git/`, or at the repo root. Delete after use anyway — the gitignore is the safety net, not a licence to accumulate.
 - **Never commit directly to `main`.** Always work in a branch and ship via `/ship` (PR). No exceptions.
 - **Never close/merge without explicit approval**
   - Never write `closes`, `fixes`, or `resolves` in commit messages or PR descriptions — these auto-close issues on merge. Use `ref #N` to reference only.
