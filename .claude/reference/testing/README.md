@@ -36,7 +36,7 @@
 │  richtext ✅     writer ✅        config/ ✅            │
 │  nested blocks ✅ round-trip ✅                          │
 │                                                         │
-│  sync/           store/           util/                 │
+│  sync/           store/           pathutil/             │
 │  page props ✅   SQLite CRUD ✅   SanitizeFileName ✅   │
 │  database ✅     FTS ✅           JoinPath ✅           │
 │  metadata ✅     triggers ✅      cmd/main ✅           │
@@ -96,7 +96,7 @@ go test -v ./...                 # verbose output
 | internal/sync | `database_integration_test.go` | ~10 | resolveDataSources, deletion detection, refreshMultiSource, output modes |
 | internal/sync | `page_test.go` | ~12 | mapPropertiesToFrontmatter (17 property types), getPageTitle |
 | internal/sync | `metadata_test.go` | 5 | _database.json read/write/list |
-| internal/util | `path_test.go` | ~8 | SanitizeFileName, JoinPath |
+| internal/pathutil | `path_test.go` | ~8 | SanitizeFileName, JoinPath |
 | **System** | 2 Claude skills | 28 steps | Full CLI lifecycle against real Notion API |
 | **Total** | **12 test files + 2 skills** | **~236 unit/integration + 28 system steps** | |
 
