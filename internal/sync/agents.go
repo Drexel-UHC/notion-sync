@@ -197,7 +197,7 @@ Key facts for downstream agents:
 
 ### Rich-text fidelity on push
 
-` + "`title`" + ` and ` + "`rich_text`" + ` ("Text") values are stored in your ` + "`.md`" + ` as a **flat Markdown string** — on import Notion's structured formatting is *rendered* to Markdown syntax (e.g. ` + "`**bold**`" + `, ` + "`[text](url)`" + `). Inline formatting (bold, italic, code, strikethrough, highlight, underline, links) is preserved as Markdown and pushed back as formatting.
+` + "`title`" + ` and ` + "`rich_text`" + ` ("Text") values are stored in your ` + "`.md`" + ` as a **flat Markdown string** — on import Notion's structured formatting is *rendered* to Markdown syntax (e.g. ` + "`**bold**`" + `, ` + "`[text](url)`" + `). Inline formatting (bold, italic, code, strikethrough, highlight, underline, links) is preserved in the file as Markdown. Whether that formatting is reconstructed as Notion formatting on push (vs. written as literal markers) depends on this binary's version — do not assume a Text cell round-trips formatting intact.
 
 Two attributes are **lost at import and therefore can never be restored on push** — they are not in your ` + "`.md`" + ` at all, so no push can reconstruct them:
 
