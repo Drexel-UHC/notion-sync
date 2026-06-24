@@ -29,7 +29,7 @@ Step-group letters map to the four-phase v1.4.0 push DAG. Each phase PR appends 
 | 1: Confirmation gate | n12b → n13 → n13a | **G** | ✅ included (PR #77) |
 | 2: Validation halts | n21 series → n22a/b | **V** | ✅ included |
 | 3a: Per-cell diff + skip no-op rows | n31 → n32a/b/c | **C** | ✅ included (PR #97) |
-| 3b/3c: Per-field payload + store-verify + restamp | n33 → n36a | **C** (later) | ⏳ TODO |
+| 3b/3c: Per-field payload + store-verify + restamp + auth halt | n33 → n34d/e → n35a/n36a; n34h | **C** | ✅ included (PR #98) |
 | 4: Run summary JSON | n41 | **S** | ⏳ TODO |
 
 When adding a phase: append a new `## Phase N — <name>` section with new step IDs (`V1`, `V2`, ... or `C1`, ...). Don't modify existing G/V/C/S blocks unless the phase explicitly redefines that contract.
@@ -418,13 +418,73 @@ On the clean folder, run: `./notion-sync.exe push "./test-output/push-e2e/notion
 
 **Revert:** re-run C0 (restores the full folder). Page 5's `last_edited_time` bumps — harmless, realigned on the next import.
 
-## Phase 3b / 3c — Per-field payload, store-verify, restamp (TODO — later PRs)
+## Phase 3b / 3c — Per-field payload, store-verify, restamp (DAG n33 → n34d/e → n35a/n36a; n34h)
 
-Deferred nodes, NOT covered by 3a — don't assert these yet:
-- **n33** — send ONLY the changed fields (cell-scoped *write*). Until this lands, a changed row re-sends its whole payload, so "untouched fields don't bump beyond the changed cell" is not yet true.
-- **n34d / n34e** — verify pushed fields were stored as sent (LOUD on mismatch).
-- **n35a / n36a** — re-query authoritative `last_edited_time` and restamp local.
-- rich_text un-skip (#95 parser) — once wired, C3's no-op flips to a real formatted push; update C3 then.
+Phase 3b/3c (PR #98) makes three changes to the *write* itself, plus an auth-halt classification:
+
+- **Cell-scoped write (n33).** A changed row now sends **only the changed fields**, not its whole payload (`buildPropertyPayloadFor(..., changedFields)`). 3a still re-sent the entire row; 3b narrows the PATCH to the diff.
+- **Read-back store-verify (n34d/n34e).** After each write the row is re-fetched and every *sent* field is compared to what Notion stored. A mismatch is a **LOUD per-row failure** and the row is **NOT restamped** (so the next run re-attempts).
+- **Precise restamp (n35a/n36a).** The same re-fetch reads Notion's authoritative `last_edited_time` (precise to the second) for the local restamp — *not* UpdatePage's minute-quantized echo (issue #57).
+- **Auth halt (n34h).** A write returning 401/403 is run-wide (the credential, not the row), so the loop halts once and skips the rest instead of failing N identical rows. Exit 1, `Auth halted:` summary, rows pushed before the halt stay pushed.
+
+**rich_text is still excluded from the diff** (`push.go:324`) — #95's un-skip did **not** land in 3b/3c, so **C3 stays a no-op. Do not flip it.**
+
+**🚨 Page 4 rule — one deliberate carve-out this phase.** The blanket "never touch Page 4" relaxes *only* for **C7**: n33 means a **scalar** edit on Page 4 under a **non-force** push sends just that scalar, leaving its rich-text `Description` untouched — that survival is exactly what C7 proves. Everywhere else the rule is unchanged: **never `--force` a folder containing Page 4** (force sends `changedFields=nil` = whole row = re-serializes `Description` as plain text = corruption), and **never edit Page 4's `Description`/rich_text locally**.
+
+### Step C7: Scalar edit on the formatting fixture preserves its rich text (n33 cell-scoped write)
+
+The in-scope version of the #55 epic symptom: editing one *scalar* field on a page must not drag that page's rich-text along as a formatting-corrupting plain-text push. In 3a this was impossible to test on Page 4 (a whole-row write would corrupt it); n33 makes it safe and asserts it.
+
+1. Re-run C0 (clean folder — Page 4's `Description` must equal Notion, i.e. not itself "changed").
+2. **Snapshot Page 4** (`35957008-e885-8192-ab0f-c75e6a011b10`) via Notion MCP `notion-fetch`. Record its `Description` rich-text payload (the annotation runs: bold / italic / link / inline-code / strikethrough / equation) and `Score` (400).
+3. Edit **only** Page 4's local `Score`: `400` → `444`. Touch nothing else. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes` (**non-force**).
+
+- **Pass:**
+  - Exit 0
+  - `Pushed: 1`, `Unchanged: 6`
+  - **Notion MCP fetch Page 4:** `Score` is now `444` **AND** `Description`'s annotation payload is **byte-identical** to the step-2 snapshot (every run + its annotations intact). A 3a whole-row write would have flattened `Description` to a single plain-text run — that regression is exactly what this step guards.
+
+**Revert:** restore Page 4's local `Score` → `400`, re-run the same `push --yes` (`Pushed: 1`, `Unchanged: 6`), then **fetch Page 4** to confirm `Score` is `400` again and `Description` is still byte-identical to the snapshot.
+
+### Step C8: Precise restamp → immediate re-push is a clean no-op (n34d happy path + n35a/n36a)
+
+Proves the read-back verify passed *and* the restamp wrote Notion's authoritative timestamp — observable because a wrong/quantized stamp resurfaces as a phantom conflict on the very next push.
+
+1. Re-run C0 if needed. Edit Page 5's local `.md` (`35957008-e885-815e-8e73-ea79c22f96d4.md`): `Score` `500` → `567`. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`.
+
+- **Pass (first push):**
+  - Exit 0, `Pushed: 1`, `Unchanged: 6`
+  - Page 5's local `.md` now has `notion-last-pushed:` set and `notion-last-edited:` updated.
+  - **Notion MCP fetch Page 5:** `Score` is `567`; record its `last_edited_time`. Assert the local `notion-last-edited` equals Notion's `last_edited_time` **to the second** (precise, not floored to the whole minute — the n35a/n36a guard against issue #57's quantized echo).
+
+2. **Without editing anything**, run the same `push --yes` **again**.
+
+- **Pass (second push):**
+  - Exit 0, `Unchanged: 7`, `Pushed: 0`, **no `Conflicts:` line**. A quantized or wrong restamp from step 1 would fail the TOCTOU timestamp compare here and show a phantom `Conflicts: 1` — a clean no-op is the proof the restamp stored the authoritative value.
+
+**Revert:** restore Page 5's local `Score` → `500`, re-run `push --yes` (`Pushed: 1`), then **fetch Page 5** to confirm `Score` is `500` again.
+
+### Step C9: Auth failure halts the run once and writes nothing (n34h) — ⏭️ SKIP until a read-only token exists
+
+⏭️ **SKIPPED by default.** Requires a second Notion integration with **Read content** capability but **NOT Update content**, shared to the push-e2e DB, with its token available (e.g. env `NOTION_SYNC_RO_KEY`). With a read-only token, the schema fetch and `GetPage` (reads) succeed but `UpdatePage` (the PATCH) returns 403 — the only scriptable way to reach n34h against live Notion. If the token isn't configured, print `Step C9: SKIPPED (no read-only token)` and move on.
+
+When the token exists:
+
+1. Re-run C0. Edit Page 2's local `Score` → `2200` and Page 3's local `Score` → `3300`. Isolate the folder to Pages 2 + 3 (delete the rest, **Page 4 critical**). Keep `_database.json` + `AGENTS.md`.
+2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes --api-key <read-only-token>`.
+
+- **Pass:**
+  - Exit code **1**
+  - stdout contains `Auth halted:` and an `authentication failed` line mentioning write access (the `AuthError` reason+fix).
+  - **One** halt, not two per-row `Failed:` lines — the run `break`s on the first 403 (n34h), it doesn't fail every row.
+  - **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both **unchanged** — the 403 wrote nothing.
+
+**Revert:** re-run C0 (no Notion write happened, so this just restores the local folder).
+
+> **Unit-only (not E2E-scriptable), recorded here so the gap is explicit:**
+> - **Verify *mismatch* (n34e)** — making live Notion store a value ≠ what was sent isn't reliable (the validation gate pre-validates select/status/multi_select), so the mismatch branch stays unit-tested in `push_test.go`. Same rationale as 3a's TOCTOU race.
+> - **`Pushed before halt: N>0`** — a static read-only token 403s from row 1, so partial progress before an auth halt can't be staged live. Unit-covered.
+> - **Empty-payload → `Skipped`** (`push.go:214`) — needs a changed field whose `buildPropertyValue` returns nil; narrow, unit territory.
 
 ## Phase 4 — Run summary JSON (TODO — added by phase 4 PR)
 
@@ -455,6 +515,8 @@ Notion MCP fetch of **every page touched by the run** — Pages 1–7 once any p
 **Phase 2 additions — re-fetch Pages 2, 3, 6, 7 against `setup.md` canonicals.** V1/V2 stale-stamp Pages 2 & 3 (must end at `Score` 200 / 300). V3 marks Page 6 deleted in the local file only (Notion-side `Score` 600 must be untouched). V4 corrupts Page 7's local YAML (Notion-side unchanged). V5 actually writes to Notion — its mandatory revert step must restore Page 2 → 200 and Page 3 → 300 before F1 runs. Don't duplicate the canonical values here — read them from `setup.md`'s per-page sections (Pages 2/3/6/7).
 
 **Phase 3a additions — re-fetch Pages 4, 5, 7 against `setup.md` canonicals.** C2 writes then reverts Page 5 (`Score` must end at 500; `Related` = [Page 4]). **Page 4 is the load-bearing check:** C2/C6 are designed never to write it, so any drift in its `Name` / `Description` annotation payload means the cell-diff skip (C2) or the `--force` isolation (C6) failed — fail the run loudly. Page 7 must remain all-null. C3 edits Page 5's `Description` locally only (no Notion write) — confirm Notion-side `Description` is canonical.
+
+**Phase 3b/3c additions — Page 4 is *doubly* load-bearing now.** C7 deliberately writes+reverts Page 4's `Score` (must end at `400`) and its `Description` annotation payload must be **byte-identical to canonical** — drift means n33's cell-scoped write regressed and re-sent the whole row. C8 writes+reverts Page 5's `Score` (must end at `500`). C9, if it ran (token present), wrote nothing, so Pages 2 & 3 must equal canonical (`Score` 200 / 300); if C9 was skipped, no extra check.
 
 If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
 
@@ -500,6 +562,9 @@ Print a summary table:
 | C4   | multi_select reorder = no-op            | PASS   |
 | C5   | Null-edges row round-trips clean        | PASS   |
 | C6   | --force bypasses the diff               | PASS   |
+| C7   | Scalar edit on Page 4 keeps rich text   | PASS   |
+| C8   | Precise restamp → re-push is no-op       | PASS   |
+| C9   | Auth 403 halts once, writes nothing     | SKIP   |
 | F1   | Final state matches canonical (1–7)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```
