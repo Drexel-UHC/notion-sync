@@ -181,6 +181,9 @@ func runPush(args []string) error {
 		fmt.Printf("  Pushed:     %d\n", result.Pushed)
 	}
 	fmt.Printf("  Skipped:   %d\n", result.Skipped)
+	if result.SkippedNoOp > 0 {
+		fmt.Printf("  Unchanged: %d (already in sync — nothing to push)\n", result.SkippedNoOp)
+	}
 
 	if result.Conflicts > 0 {
 		fmt.Printf("  Conflicts: %d (Notion has newer edits — use --force to overwrite)\n", result.Conflicts)
