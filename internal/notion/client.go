@@ -413,6 +413,21 @@ func IsNotFoundError(err error) bool {
 	return false
 }
 
+// IsAuthError reports whether err is a Notion API authentication/authorization
+// failure (HTTP 401 or 403). These are run-wide: the credential, not the row, is
+// the problem, so every subsequent write would fail identically. The push loop
+// uses this to halt the whole run once (DAG n34h) instead of failing N rows.
+//
+// It intentionally does not narrow by message (unlike IsNotFoundError's 401
+// special-case): any 401/403 reaching a write means the token can't write here.
+func IsAuthError(err error) bool {
+	var apiErr *ErrorResponse
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == 401 || apiErr.Status == 403
+	}
+	return false
+}
+
 var hexIDRe = regexp.MustCompile(`[a-f0-9]{32}`)
 
 // NormalizeNotionID accepts a 32-char hex string, UUID with dashes, or full Notion URL.

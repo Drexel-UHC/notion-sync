@@ -23,6 +23,11 @@ type mockNotionClient struct {
 	// successful UpdatePage call. Simulates Notion's stored state advancing
 	// to a precise post-edit timestamp that subsequent GetPage calls see.
 	postUpdatePages map[string]*notion.Page
+	// updateErrors, when set for a page ID, makes UpdatePage return that error
+	// for the row (the terminal outcome after the HTTP client's own retries).
+	// Used to exercise the push loop's error classifier: per-row 4xx (n34c) vs
+	// run-wide auth 401/403 (n34h).
+	updateErrors map[string]error
 }
 
 type updateRequest struct {
@@ -39,6 +44,7 @@ func newMockClient() *mockNotionClient {
 		blocks:            make(map[string][]notion.Block),
 		updatePageReturns: make(map[string]*notion.Page),
 		postUpdatePages:   make(map[string]*notion.Page),
+		updateErrors:      make(map[string]error),
 	}
 }
 
@@ -77,6 +83,12 @@ func (m *mockNotionClient) GetPage(pageID string) (*notion.Page, error) {
 func (m *mockNotionClient) UpdatePage(pageID string, properties map[string]interface{}) (*notion.Page, error) {
 	m.updateRequests = append(m.updateRequests, updateRequest{PageID: pageID, Properties: properties})
 
+	// Injected terminal failure for this row — return before touching stored
+	// state, mirroring Notion rejecting the write.
+	if err, ok := m.updateErrors[pageID]; ok && err != nil {
+		return nil, err
+	}
+
 	var response *notion.Page
 	if override, ok := m.updatePageReturns[pageID]; ok {
 		response = override
@@ -88,12 +100,174 @@ func (m *mockNotionClient) UpdatePage(pageID string, properties map[string]inter
 		response = page
 	}
 
-	// Simulate Notion's stored state advancing after a successful update.
+	// Advance the stored state that subsequent GetPage calls observe. A test that
+	// sets postUpdatePages controls the stored row verbatim (used to simulate a
+	// read-back mismatch or a specific post-edit timestamp); otherwise the mock
+	// simulates Notion storing exactly what we sent, so the read-back verify
+	// (DAG n34d) sees the new values and passes.
 	if post, ok := m.postUpdatePages[pageID]; ok {
 		m.pages[pageID] = post
+	} else if base, ok := m.pages[pageID]; ok {
+		m.pages[pageID] = applyProps(clonePage(base), properties)
 	}
 
 	return response, nil
+}
+
+// clonePage deep-copies a page's Properties map so applyProps can mutate the
+// stored copy without touching the fixture the test set up.
+func clonePage(p *notion.Page) *notion.Page {
+	cp := *p
+	cp.Properties = make(map[string]notion.Property, len(p.Properties))
+	for k, v := range p.Properties {
+		cp.Properties[k] = v
+	}
+	return &cp
+}
+
+// applyProps decodes an UpdatePage payload (as built by buildPropertyValue) back
+// into the page's Property structs, so a subsequent GetPage reflects what was
+// sent. This is what lets the read-back verify (DAG n34d) be exercised against
+// the mock instead of always trivially passing.
+func applyProps(page *notion.Page, properties map[string]interface{}) *notion.Page {
+	if page.Properties == nil {
+		page.Properties = map[string]notion.Property{}
+	}
+	for key, raw := range properties {
+		payload, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		prop := page.Properties[key]
+		switch {
+		case hasKey(payload, "title"):
+			prop.Type, prop.Title = "title", decodeRichTextPayload(payload["title"])
+		case hasKey(payload, "rich_text"):
+			prop.Type, prop.RichText = "rich_text", decodeRichTextPayload(payload["rich_text"])
+		case hasKey(payload, "number"):
+			prop.Type, prop.Number = "number", decodeFloatPtr(payload["number"])
+		case hasKey(payload, "select"):
+			prop.Type, prop.Select = "select", decodeNamePtr(payload["select"])
+		case hasKey(payload, "status"):
+			prop.Type, prop.Status = "status", decodeNamePtr(payload["status"])
+		case hasKey(payload, "multi_select"):
+			prop.Type, prop.MultiSelect = "multi_select", decodeNameSlice(payload["multi_select"])
+		case hasKey(payload, "date"):
+			prop.Type, prop.Date = "date", decodeDatePayload(payload["date"])
+		case hasKey(payload, "checkbox"):
+			prop.Type = "checkbox"
+			if b, ok := payload["checkbox"].(bool); ok {
+				prop.Checkbox = b
+			}
+		case hasKey(payload, "url"):
+			prop.Type, prop.URL = "url", decodeStrPtr(payload["url"])
+		case hasKey(payload, "email"):
+			prop.Type, prop.Email = "email", decodeStrPtr(payload["email"])
+		case hasKey(payload, "phone_number"):
+			prop.Type, prop.PhoneNumber = "phone_number", decodeStrPtr(payload["phone_number"])
+		case hasKey(payload, "relation"):
+			prop.Type, prop.Relation = "relation", decodeRelation(payload["relation"])
+		}
+		page.Properties[key] = prop
+	}
+	return page
+}
+
+func hasKey(m map[string]interface{}, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
+func decodeRichTextPayload(v interface{}) []notion.RichText {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []notion.RichText
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text, _ := m["text"].(map[string]interface{})
+		content, _ := text["content"].(string)
+		out = append(out, notion.RichText{
+			Type:      "text",
+			PlainText: content,
+			Text:      &notion.TextContent{Content: content},
+		})
+	}
+	return out
+}
+
+func decodeFloatPtr(v interface{}) *float64 {
+	if f, ok := v.(float64); ok {
+		return &f
+	}
+	return nil
+}
+
+func decodeNamePtr(v interface{}) *notion.SelectValue {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	name, _ := m["name"].(string)
+	return &notion.SelectValue{Name: name}
+}
+
+func decodeNameSlice(v interface{}) []notion.SelectValue {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []notion.SelectValue
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		out = append(out, notion.SelectValue{Name: name})
+	}
+	return out
+}
+
+func decodeDatePayload(v interface{}) *notion.DateValue {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	start, _ := m["start"].(string)
+	dv := &notion.DateValue{Start: start}
+	if end, ok := m["end"].(string); ok && end != "" {
+		dv.End = &end
+	}
+	return dv
+}
+
+func decodeStrPtr(v interface{}) *string {
+	if s, ok := v.(string); ok {
+		return &s
+	}
+	return nil
+}
+
+func decodeRelation(v interface{}) []notion.Relation {
+	items, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []notion.Relation
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		out = append(out, notion.Relation{ID: id})
+	}
+	return out
 }
 
 func (m *mockNotionClient) FetchAllBlocks(blockID string) ([]notion.Block, error) {

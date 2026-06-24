@@ -1,6 +1,9 @@
 package notion
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestIsNotFoundError(t *testing.T) {
 	tests := []struct {
@@ -52,6 +55,31 @@ func TestIsNotFoundError(t *testing.T) {
 				t.Errorf("IsNotFoundError(%+v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsAuthError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *ErrorResponse
+		want bool
+	}{
+		{name: "401 unauthorized", err: &ErrorResponse{Status: 401, Code: "unauthorized", Message: "API token is invalid"}, want: true},
+		{name: "403 restricted", err: &ErrorResponse{Status: 403, Code: "restricted_resource", Message: "insufficient permissions"}, want: true},
+		{name: "400 validation is not auth", err: &ErrorResponse{Status: 400, Code: "validation_error", Message: "body failed validation"}, want: false},
+		{name: "404 not found is not auth", err: &ErrorResponse{Status: 404, Code: "object_not_found", Message: "Could not find page"}, want: false},
+		{name: "429 rate limit is not auth", err: &ErrorResponse{Status: 429, Code: "rate_limited", Message: "slow down"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsAuthError(tt.err); got != tt.want {
+				t.Errorf("IsAuthError(%+v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+	// A non-API error (e.g. a network failure) is not an auth halt.
+	if IsAuthError(fmt.Errorf("connection reset")) {
+		t.Error("a plain error must not be classified as auth")
 	}
 }
 

@@ -169,6 +169,14 @@ func runPush(args []string) error {
 		return fmt.Errorf("push halted by validation gate (%d halt(s))", len(result.Halts))
 	}
 
+	// Auth halted (DAG n34h) — a write returned 401/403, so the run stopped and
+	// the remaining rows were skipped. Rows before the halt may have pushed;
+	// the renderer owns up to that. Exit non-zero like the validation halt.
+	if result.AuthHalted {
+		renderAuthHaltedResult(result, os.Stdout)
+		return fmt.Errorf("push halted by auth failure")
+	}
+
 	if *dryRun {
 		fmt.Printf("Dry run: \"%s\"\n", result.Title)
 	} else {
@@ -220,6 +228,21 @@ func renderHaltedResult(result *sync.PushResult, w io.Writer) {
 	for _, h := range result.Halts {
 		fmt.Fprintf(w, "    - %s [%s] — %s\n", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
 	}
+}
+
+// renderAuthHaltedResult writes the auth-halt summary (DAG n34h) to w. Separate
+// from renderHaltedResult because an auth halt fires mid-run: rows before it may
+// already be pushed, so this reports partial progress (instead of the validation
+// halt's "nothing pushed") plus the one-line reason+fix carried in AuthError.
+func renderAuthHaltedResult(result *sync.PushResult, w io.Writer) {
+	fmt.Fprintf(w, "Auth halted: \"%s\"\n", result.Title)
+	if result.Pushed > 0 {
+		fmt.Fprintf(w, "  Pushed before halt: %d\n", result.Pushed)
+	}
+	if result.Failed > 0 {
+		fmt.Fprintf(w, "  Failed before halt: %d\n", result.Failed)
+	}
+	fmt.Fprintf(w, "  %s\n", result.AuthError)
 }
 
 // haltClassLabel renders a Classification as a short user-facing label
