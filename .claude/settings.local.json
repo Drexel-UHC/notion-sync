@@ -21,7 +21,8 @@
       "WebSearch",
       "WebFetch",
       "PowerShell",
-      "mcp__claude_ai_Notion__notion-update-data-source"
+      "mcp__claude_ai_Notion__notion-update-data-source",
+      "mcp__claude_ai_Notion__notion-get-users"
     ]
   },
   "enableAllProjectMcpServers": true,

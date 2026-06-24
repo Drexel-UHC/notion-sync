@@ -7,6 +7,24 @@ import (
 	"testing"
 )
 
+// TestAgentsMD_DocumentsRichTextPushLimitations locks the Gap 1 agreement (#95):
+// the distributed AGENTS.md must warn downstream agents that foreground color and
+// @user mention identity are lost on import and never round-trip on push, so the
+// "Pushable? yes" rows aren't read as full-fidelity.
+func TestAgentsMD_DocumentsRichTextPushLimitations(t *testing.T) {
+	content := renderAgentsMD()
+	for _, want := range []string{
+		"Rich-text fidelity on push",
+		"Foreground (text) color",
+		"mention identity",
+		"never be restored on push",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("AGENTS.md missing rich-text push limitation note: %q", want)
+		}
+	}
+}
+
 func TestEnsureAgentsMDCurrent_RewritesIfStaleStamp(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "AGENTS.md")
