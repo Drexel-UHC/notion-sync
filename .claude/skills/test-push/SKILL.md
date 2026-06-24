@@ -30,7 +30,7 @@ Step-group letters map to the four-phase v1.4.0 push DAG. Each phase PR appends 
 | 2: Validation halts | n21 series → n22a/b | **V** | ✅ included |
 | 3a: Per-cell diff + skip no-op rows | n31 → n32a/b/c | **C** | ✅ included (PR #97) |
 | 3b/3c: Per-field payload + store-verify + restamp + auth halt | n33 → n34d/e → n35a/n36a; n34h | **C** | ✅ included (PR #98) |
-| 4: Run summary JSON | n41 | **S** | ⏳ TODO |
+| 4: Run summary JSON | n41 | **S** | ✅ included (PR #101) |
 
 When adding a phase: append a new `## Phase N — <name>` section with new step IDs (`V1`, `V2`, ... or `C1`, ...). Don't modify existing G/V/C/S blocks unless the phase explicitly redefines that contract.
 
@@ -487,13 +487,66 @@ When the token exists:
 > - **`Pushed before halt: N>0`** — a static read-only token 403s from row 1, so partial progress before an auth halt can't be staged live. Unit-covered.
 > - **Empty-payload → `Skipped`** (`push.go:214`) — needs a changed field whose `buildPropertyValue` returns nil; narrow, unit territory.
 
-## Phase 4 — Run summary JSON (TODO — added by phase 4 PR)
+## Phase 4 — Run summary JSON (DAG n41)
 
-Steps `S1`...`Sn`. Expected coverage:
-- JSON schema matches `dag-v1.4.0.mmd` header comment.
-- `status` enum: `clean` / `partial` / `halted` / `cancelled`.
-- Exit code matrix: `0` for clean/cancelled, `1` for partial/halted.
-- Per-row `pushed` / `skippedNoOp` / `skippedNonRow` / `failed` / `halted` arrays populated correctly.
+Phase 4 emits a machine-readable JSON `RunSummary` as the **leading object on stdout** of every push (cancel, dry-run, halt included). Banners, the `\r` progress line, the queue preview, and the final error all moved to **stderr**. So this phase is a **sanity overlay**, not new pushes: it re-runs a few representative G/V/C steps with the streams split and eyeballs the leading JSON. No formal assertions, no new fixtures.
+
+The summary contract is already unit/CLI tested (mock client, in `summary_test.go` / `push_test.go`). These `S` steps add **real-Notion** confidence that live pushes produce the right `status` / arrays / exit — a sanity pass, not the source of truth.
+
+### How to capture (per step)
+
+Run the step's existing push with the two streams teed to files (PowerShell shown; `$LASTEXITCODE` is the exit code — don't trust `$?` for native-exe exit):
+
+```powershell
+./notion-sync.exe push "<folder>" [flags] 1>summary.txt 2>progress.txt
+"exit=$LASTEXITCODE"
+```
+
+- `summary.txt` (stdout) leads with the JSON object, then the `─────` divider, then the human counts.
+- `progress.txt` (stderr) holds banners + the `\r` progress line + the queue preview + the final halt/error line.
+- **The summary is the first complete `{...}` object.** It's pretty-printed (multi-line), so read down to the divider line, not just line 1. The structural check is "first non-space byte of stdout is `{`".
+- Splitting the streams means the existing G/V/C "combined output contains X" assertions now live across **both** files — check the right stream (preview/banners/halt line in `progress.txt`, JSON + human counts in `summary.txt`).
+
+### Scenario → expected summary
+
+| Rides on step | `status` | Key array content | exit |
+|---|---|---|---|
+| **G1** cancel (non-TTY, no `--yes`) | `cancelled` | **all arrays `[]`** — cancel emits the summary from an empty result *before* any classify, so even `skippedNonRow` is empty | 0 |
+| **G2** `--yes`, Score edited | `clean` | `pushed:[{file:"<canary>.md", fields:["Score"]}]`, `skippedNonRow:[{file:"AGENTS.md", reason:"AGENTS.md"}]` | 0 |
+| **C1** `--dry-run`, fresh import | `clean` | `pushed:[]`, `skippedNoOp` lists all 7 rows, `skippedNonRow:[{AGENTS.md}]` (dry-run still classifies) | 0 |
+| **V2** multi-halt | `halted` | `halted[]` = 3 × `{phase:"validation", file, reason, fix}` (2 conflict + 1 stray), `pushed:[]`, `skippedNonRow:[{AGENTS.md}]` | 1 |
+| **V3** soft-deleted | `clean` | `skippedNonRow` includes Page 6 `{reason:"notion-deleted"}` | 0 |
+| **V5 / C6** `--force` | `clean` | `pushed[].fields` = full **sorted payload keys** (force has no per-cell diff → not just the edited field) | 0 |
+
+**`skippedNonRow` appears on every path that reaches the validation classifier — normal, halt, `--force`, dry-run — but NOT cancel** (cancel short-circuits before the classifier runs).
+
+### Step S1 — `clean` + per-field `fields` (rides G2)
+Capture G2's `push --yes` stdout.
+- **Pass:** leading byte `{`; `status:"clean"`; `pushed` has the canary with `fields:["Score"]` (only the edited field — n33 cell-scoped, not the whole payload); `skippedNonRow:[{AGENTS.md}]`; `failed`/`halted`/`skippedNoOp` empty; exit 0.
+
+### Step S2 — `cancelled` + empty arrays (rides G1)
+Capture G1's gated (no-`--yes`) stdout.
+- **Pass:** `status:"cancelled"`; **every** array `[]` (incl. `skippedNonRow` — classifier never ran); exit 0. The queue preview + `Cancelled` line are in `progress.txt`, not the summary.
+
+### Step S3 — `clean` dry-run, all-no-op arrays (rides C1)
+Capture C1's `push --dry-run` stdout.
+- **Pass:** `status:"clean"`; `pushed:[]`; `skippedNoOp` lists all 7 basenames; `skippedNonRow:[{AGENTS.md}]`; exit 0. Proves dry-run classifies and reports would-skip rows without a write.
+
+### Step S4 — `halted` with per-halt entries (rides V2)
+Capture V2's `push --yes` stdout.
+- **Pass:** leading byte `{`; `status:"halted"`; `halted[]` has 3 entries, each `phase:"validation"` with non-empty `file`/`reason`/`fix` (Page 2 + Page 3 conflict, `random-stray.md` stray); `pushed:[]`; `skippedNonRow:[{AGENTS.md}]`; exit 1. The JSON precedes the human halt list on stdout; `push halted by validation gate` is in `progress.txt`.
+
+### Step S5 — `skippedNonRow` soft-delete reason (rides V3)
+Capture V3's `push --yes` stdout.
+- **Pass:** `skippedNonRow` includes Page 6 with `reason:"notion-deleted"` (alongside `{AGENTS.md}`); `status:"clean"`; exit 0. (Don't pin Page 5's bucket — post-3a an unedited Page 5 diffs to a no-op and lands in `skippedNoOp`, not `pushed`.)
+
+### Step S6 — `--force` `fields` fallback (rides V5 or C6)
+Capture the `--force` push stdout from V5 (Pages 2+3) or C6 (Page 5).
+- **Pass:** `pushed[].fields` is the full **sorted** set of pushable keys for the row (not just the edited field) — force has no snapshot to diff, so it overwrites blind; **no `skippedNoOp`**; `status:"clean"`; exit 0.
+
+> **Unit-only — NOT checked live (recorded so the gap is explicit):**
+> - **`status:"partial"` / `failed[]`** — every live route to a per-row failure is either a network artifact (re-fetch fail), an unscriptable mid-run race (n32c), a read-back mismatch the gate pre-empts (n34e), or a 4xx the validation gate already turns into a *halt*. No G/V/C step produces `partial`; it stays unit-tested in `push_test.go` / `summary_test.go`. **Don't hunt for it live.**
+> - **Auth halt `{phase:"auth"}`** — only reachable with a read-only token (see **C9**, skipped by default). When C9 runs, also confirm its summary's `halted:[{phase:"auth", file:"", reason, fix}]` and exit 1.
 
 ---
 
@@ -566,6 +619,12 @@ Print a summary table:
 | C7   | Scalar edit on Page 4 keeps rich text   | PASS   |
 | C8   | Restamp aligns local; re-push no conflict | PASS  |
 | C9   | Auth 403 halts once, writes nothing     | SKIP   |
+| S1   | clean + per-field fields (rides G2)     | PASS   |
+| S2   | cancelled + empty arrays (rides G1)     | PASS   |
+| S3   | dry-run all-no-op arrays (rides C1)     | PASS   |
+| S4   | halted entries, exit 1 (rides V2)       | PASS   |
+| S5   | skippedNonRow soft-delete (rides V3)    | PASS   |
+| S6   | --force fields fallback (rides V5/C6)   | PASS   |
 | F1   | Final state matches canonical (1–7)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```
