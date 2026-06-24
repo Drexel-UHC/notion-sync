@@ -123,6 +123,130 @@ func TestParseRichText(t *testing.T) {
 	}
 }
 
+// TestParseRichText_MarkerBalancing is the parser-hardening contract (issue #95):
+// stray, space-flanked, or unpaired markers in ordinary cell values must be
+// emitted as literal text, never consumed as formatting. Before this fix the
+// naive toggle model fabricated formatting and dropped the delimiter — e.g.
+// "2 * 3" became " 3" italic with the "*" deleted — reintroducing the very
+// corruption the parser exists to prevent.
+func TestParseRichText_MarkerBalancing(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []notion.RichText
+	}{
+		{
+			name:  "space-flanked asterisk is literal (multiplication)",
+			input: "2 * 3 = 6",
+			want: []notion.RichText{
+				txt("2 * 3 = 6", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "two space-flanked asterisks stay literal (chained multiply)",
+			input: "5 * 4 * 3",
+			want: []notion.RichText{
+				txt("5 * 4 * 3", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "space-flanked highlight markers are literal",
+			input: "100% == done",
+			want: []notion.RichText{
+				txt("100% == done", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "space-flanked highlight comparison stays literal",
+			input: "x == y == z",
+			want: []notion.RichText{
+				txt("x == y == z", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "odd asterisk run pairs once, trailing marker is literal",
+			input: "a*b*c*d",
+			want: []notion.RichText{
+				txt("a", notion.Annotations{Color: "default"}),
+				txt("b", notion.Annotations{Italic: true, Color: "default"}),
+				txt("c*d", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "lone asterisk is literal",
+			input: "*",
+			want: []notion.RichText{
+				txt("*", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "unterminated backtick is literal, not a code span",
+			input: "use `ls here",
+			want: []notion.RichText{
+				txt("use `ls here", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "unmatched closing underline tag is literal",
+			input: "a</u>b",
+			want: []notion.RichText{
+				txt("a</u>b", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "unmatched opening underline tag is literal",
+			input: "a<u>b",
+			want: []notion.RichText{
+				txt("a<u>b", notion.Annotations{Color: "default"}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseRichText(tt.input)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseRichText(%q):\n got = %s\nwant = %s", tt.input, dump(got), dump(tt.want))
+			}
+		})
+	}
+}
+
+// TestParseRichText_NestedLinkDelimiters is the link-hardening contract (issue
+// #95): a URL containing parentheses (Wikipedia and friends) must keep its full
+// URL. The naive "first )" match truncated it and emitted a phantom ")" segment —
+// the Markdown string still round-tripped, hiding the structural corruption, so
+// this asserts the parsed structure directly.
+func TestParseRichText_NestedLinkDelimiters(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []notion.RichText
+	}{
+		{
+			name:  "parenthesized URL keeps balanced closing paren",
+			input: "[x](https://en.wikipedia.org/wiki/Foo_(bar))",
+			want: []notion.RichText{
+				link("x", "https://en.wikipedia.org/wiki/Foo_(bar)", notion.Annotations{Color: "default"}),
+			},
+		},
+		{
+			name:  "plain link is unaffected",
+			input: "[a](https://example.com)",
+			want: []notion.RichText{
+				link("a", "https://example.com", notion.Annotations{Color: "default"}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseRichText(tt.input)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseRichText(%q):\n got = %s\nwant = %s", tt.input, dump(got), dump(tt.want))
+			}
+		})
+	}
+}
+
 // txt builds a plain "text" rich-text segment with the given content and annotations.
 func txt(content string, a notion.Annotations) notion.RichText {
 	return notion.RichText{
@@ -151,6 +275,13 @@ func TestParseRichText_RoundTrip(t *testing.T) {
 		"**bold *and italic* bold**",
 		"**[text](https://example.com)**",
 		"plain `inline code` and **bold** mixed",
+		// Adversarial: ordinary cell values whose stray markers must survive as
+		// literals rather than be consumed as formatting (issue #95, parser hardening).
+		"2 * 3 = 6",
+		"5 * 4 * 3",
+		"100% == done",
+		"a*b*c*d",
+		"[x](https://en.wikipedia.org/wiki/Foo_(bar))",
 	}
 	for _, s := range cases {
 		t.Run(s, func(t *testing.T) {

@@ -118,9 +118,39 @@ func TestBuildPropertyValue_RichText(t *testing.T) {
 	if len(rt) != 1 {
 		t.Fatalf("expected 1 rich_text item, got %d", len(rt))
 	}
-	text := rt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
+	item := rt[0].(map[string]interface{})
+	text := item["text"].(map[string]interface{})["content"]
 	if text != "hello world" {
 		t.Errorf("expected 'hello world', got %v", text)
+	}
+	// Plain text carries no annotations object (minimal payload).
+	if _, ok := item["annotations"]; ok {
+		t.Errorf("expected no annotations for plain text, got %v", item["annotations"])
+	}
+}
+
+// #95 wiring: a rich_text value with inline Markdown is deserialized into
+// formatted segments (not sent as literal markers). "a **b** c" → three segments
+// with the middle one bold.
+func TestBuildPropertyValue_RichTextFormattingPreserved(t *testing.T) {
+	got := buildPropertyValue("rich_text", "a **b** c")
+	rt := got.(map[string]interface{})["rich_text"].([]interface{})
+	if len(rt) != 3 {
+		t.Fatalf("expected 3 segments for 'a **b** c', got %d: %v", len(rt), rt)
+	}
+	mid := rt[1].(map[string]interface{})
+	if c := mid["text"].(map[string]interface{})["content"]; c != "b" {
+		t.Errorf("expected middle segment content 'b', got %q", c)
+	}
+	ann, ok := mid["annotations"].(map[string]interface{})
+	if !ok || ann["bold"] != true {
+		t.Errorf("expected middle segment to be bold, got annotations %v", mid["annotations"])
+	}
+	// The bold markers must not survive as literal text in any segment.
+	for _, item := range rt {
+		if c := item.(map[string]interface{})["text"].(map[string]interface{})["content"].(string); strings.Contains(c, "**") {
+			t.Errorf("expected no literal '**' markers, found in %q", c)
+		}
 	}
 }
 
@@ -136,23 +166,19 @@ func TestBuildPropertyValue_Title(t *testing.T) {
 	}
 }
 
-// Empty string in the title frontmatter key is intentionally pushed as a
-// single empty rich-text item, mirroring rich_text behavior. Locks in this
-// choice so it doesn't silently drift to {"title": []} (Notion's "clear").
+// Empty string clears the cell: the parser (#95) returns no segments for "", so
+// the title is pushed as an empty rich-text array ({"title": []}) — Notion's
+// "clear". (Reverses the pre-#95 choice of a single empty item.)
 func TestBuildPropertyValue_TitleEmptyString(t *testing.T) {
 	got := buildPropertyValue("title", "")
 	tt := got.(map[string]interface{})["title"].([]interface{})
-	if len(tt) != 1 {
-		t.Fatalf("expected 1 title item for empty string, got %d", len(tt))
-	}
-	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
-	if text != "" {
-		t.Errorf("expected empty content, got %q", text)
+	if len(tt) != 0 {
+		t.Fatalf("expected empty title array for empty string, got %d items", len(tt))
 	}
 }
 
-// Nil flows through coerceString → "" and is pushed as an empty title item,
-// same as rich_text. Locks in the behavior.
+// Nil flows through coerceString → "" → the parser yields no segments, so the
+// title is pushed as an empty array (Notion's "clear"). Still present in the payload.
 func TestBuildPropertyPayload_TitleNilCoercesToEmpty(t *testing.T) {
 	schema := map[string]notion.DatabaseProperty{"Metric Name": {Type: "title"}}
 	fm := map[string]interface{}{"Metric Name": nil}
@@ -162,30 +188,47 @@ func TestBuildPropertyPayload_TitleNilCoercesToEmpty(t *testing.T) {
 	}
 	payload, ok := got["Metric Name"]
 	if !ok {
-		t.Fatalf("expected 'Metric Name' in payload (nil → empty), got %v", got)
+		t.Fatalf("expected 'Metric Name' in payload (nil → empty array), got %v", got)
 	}
 	tt := payload.(map[string]interface{})["title"].([]interface{})
-	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
-	if text != "" {
-		t.Errorf("expected empty content for nil title, got %q", text)
+	if len(tt) != 0 {
+		t.Fatalf("expected empty title array for nil, got %d items", len(tt))
 	}
 }
 
-// Known limitation: imported titles encode formatting (bold, links, mentions)
-// as literal markdown via ConvertRichText. Push sends that string as plain
-// text content with no parsing — so a roundtripped title loses its formatting
-// and gains visible asterisks/brackets in Notion. This test pins the current
-// behavior so a regression (or a future fix) is loud.
-func TestBuildPropertyValue_TitleMarkdownIsLiteral(t *testing.T) {
+// Imported titles/rich_text encode formatting as Markdown via ConvertRichText.
+// Push now deserializes that Markdown back into a Notion rich-text array
+// (#95 Gap 2), so bold/links round-trip instead of landing as literal markers.
+// Mentions ([[notion-id: ...]]) are intentionally NOT parsed and stay literal.
+func TestBuildPropertyValue_TitleMarkdownIsParsed(t *testing.T) {
 	in := "**Bold** with [link](https://example.com) and [[notion-id: abc]]"
 	got := buildPropertyValue("title", in)
 	tt := got.(map[string]interface{})["title"].([]interface{})
-	if len(tt) != 1 {
-		t.Fatalf("expected 1 title item, got %d", len(tt))
+
+	// First segment is bold "Bold".
+	first := tt[0].(map[string]interface{})
+	if c := first["text"].(map[string]interface{})["content"]; c != "Bold" {
+		t.Errorf("expected first segment content 'Bold', got %q", c)
 	}
-	text := tt[0].(map[string]interface{})["text"].(map[string]interface{})["content"]
-	if text != in {
-		t.Errorf("expected markdown to be sent verbatim as plain text\n  want: %q\n   got: %q", in, text)
+	if ann, _ := first["annotations"].(map[string]interface{}); ann == nil || ann["bold"] != true {
+		t.Errorf("expected first segment to be bold, got annotations %v", first["annotations"])
+	}
+
+	// A link segment carries the URL; the mention stays literal text.
+	var linkURL string
+	var joined strings.Builder
+	for _, item := range tt {
+		txt := item.(map[string]interface{})["text"].(map[string]interface{})
+		joined.WriteString(txt["content"].(string))
+		if l, ok := txt["link"].(map[string]interface{}); ok {
+			linkURL = l["url"].(string)
+		}
+	}
+	if linkURL != "https://example.com" {
+		t.Errorf("expected a link segment with the URL, got %q", linkURL)
+	}
+	if !strings.Contains(joined.String(), "[[notion-id: abc]]") {
+		t.Errorf("expected the mention to stay literal, joined content = %q", joined.String())
 	}
 }
 
@@ -434,10 +477,10 @@ func TestDiffRow_n31_DateMidnightNormalizationIsNoChange(t *testing.T) {
 	}
 }
 
-// n31: the deliberate "3a skip" — rich_text is excluded from the diff until
-// #95's parser lands. Even a genuine rich_text edit must not count as a change,
-// so it never triggers the formatting-corrupting literal-plain push.
-func TestDiffRow_n31_RichTextExcludedFromDiff(t *testing.T) {
+// n31: the 3a skip is reversed (#95) — rich_text now participates in the diff
+// because the parser lets it round-trip with formatting intact. A genuine
+// rich_text edit is a real change again.
+func TestDiffRow_n31_RichTextChangeDetected(t *testing.T) {
 	snapshot := &notion.Page{
 		Properties: map[string]notion.Property{
 			"Notes": {Type: "rich_text", RichText: []notion.RichText{
@@ -449,8 +492,28 @@ func TestDiffRow_n31_RichTextExcludedFromDiff(t *testing.T) {
 	fm := map[string]interface{}{"Notes": "new text"} // changed locally
 
 	got := diffRow(fm, snapshot, schema)
+	if len(got) != 1 || got[0] != "Notes" {
+		t.Errorf("expected [Notes] (rich_text edit detected), got %v", got)
+	}
+}
+
+// n31: an unchanged rich_text cell — local Markdown equals the snapshot rendered
+// by ConvertRichText — is not flagged, so a no-op edit never reaches the push.
+func TestDiffRow_n31_RichTextUnchangedIsNoOp(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Notes": {Type: "rich_text", RichText: []notion.RichText{
+				{Type: "text", PlainText: "bold", Text: &notion.TextContent{Content: "bold"},
+					Annotations: notion.Annotations{Bold: true, Color: "default"}},
+			}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Notes": {Type: "rich_text"}}
+	fm := map[string]interface{}{"Notes": "**bold**"} // matches the rendered snapshot
+
+	got := diffRow(fm, snapshot, schema)
 	if len(got) != 0 {
-		t.Errorf("expected rich_text to be excluded from diff, got %v", got)
+		t.Errorf("expected no change for matching rich_text, got %v", got)
 	}
 }
 
@@ -527,8 +590,8 @@ func TestPushDatabase_n32a_UnchangedRowSkippedNoOp_NoUpdatePageCall(t *testing.T
 // n33: the push must send ONLY the fields the diff flagged as changed, not the
 // whole pushable set. Here Status matches the snapshot and only Priority moved —
 // the UpdatePage payload must carry Priority alone. Sending the untouched Status
-// is wasteful and, for a mixed rich_text+scalar edit, would re-send (and corrupt)
-// the rich_text the diff deliberately skipped.
+// is wasteful and, for a mixed rich_text+scalar edit, would needlessly re-send an
+// unchanged rich_text cell the diff (correctly) left out of the changed set.
 func TestPushDatabase_n33_SendsOnlyChangedFields(t *testing.T) {
 	dir := t.TempDir()
 	writeDatabaseMeta(t, dir, "db-001")

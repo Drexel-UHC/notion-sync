@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
 
@@ -302,11 +303,11 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 //
 // It mirrors buildPropertyPayload's iteration (same notion-key / read-only-type
 // skips) so the diff can never flag a field the push wouldn't actually send.
-// rich_text is additionally skipped — the deliberate "3a skip" (issue #55):
-// pushing rich_text as literal plain text corrupts formatting, so until #95's
-// parser is wired a rich-text-only edit must not count as a change. The snapshot
-// is decoded with mapPropertiesToFrontmatter so both sides are compared in the
-// same frontmatter representation they were imported in.
+// rich_text now participates: the 3a skip (issue #55) is reversed because #95's
+// parser lets rich_text round-trip with formatting intact, so a rich-text edit is
+// a real change again. The snapshot is decoded with mapPropertiesToFrontmatter so
+// both sides are compared in the same frontmatter representation they were
+// imported in — rich_text on both sides is the rendered Markdown string.
 func diffRow(fm map[string]interface{}, snapshot *notion.Page, schema map[string]notion.DatabaseProperty) []string {
 	remote := map[string]interface{}{}
 	if snapshot != nil {
@@ -316,12 +317,6 @@ func diffRow(fm map[string]interface{}, snapshot *notion.Page, schema map[string
 	for key, localVal := range fm {
 		prop, ok := pushableField(key, schema)
 		if !ok {
-			continue
-		}
-		// The deliberate "3a skip": rich_text is excluded from the diff (but not
-		// from buildPropertyPayload's send) until #95's parser lands, so a
-		// rich_text-only edit is a no-op instead of a formatting-corrupting push.
-		if prop.Type == "rich_text" {
 			continue
 		}
 		if !valuesEqual(prop.Type, localVal, remote[key]) {
@@ -344,11 +339,11 @@ type fieldMismatch struct {
 // verifyStoredFields re-decodes the row Notion stored after a push and returns a
 // mismatch for each changed field whose stored value does not match what we sent
 // (DAG n34d). A non-empty result is a read-back mismatch (n34e). It compares only
-// the fields the push actually sent (changedFields) and, like diffRow, skips
-// rich_text — rich_text is never sent (the 3a skip), so it can be neither
-// verified nor blamed. mapPropertiesToFrontmatter + valuesEqual decode and
-// compare both sides in the same representation the diff used, so verify can't
-// disagree with diff.
+// the fields the push actually sent (changedFields). rich_text now participates
+// (the 3a skip is reversed, #95): it is sent through the parser and read back as
+// rendered Markdown, so a formatting round-trip failure surfaces here like any
+// other field. mapPropertiesToFrontmatter + valuesEqual decode and compare both
+// sides in the same representation the diff used, so verify can't disagree with diff.
 func verifyStoredFields(fm map[string]interface{}, stored *notion.Page, schema map[string]notion.DatabaseProperty, changedFields []string) []fieldMismatch {
 	remote := map[string]interface{}{}
 	if stored != nil {
@@ -358,9 +353,6 @@ func verifyStoredFields(fm map[string]interface{}, stored *notion.Page, schema m
 	for _, key := range changedFields {
 		prop, ok := pushableField(key, schema)
 		if !ok {
-			continue
-		}
-		if prop.Type == "rich_text" {
 			continue
 		}
 		if !valuesEqual(prop.Type, fm[key], remote[key]) {
@@ -398,9 +390,11 @@ func pushableField(key string, schema map[string]notion.DatabaseProperty) (notio
 // snapshot value represent the same stored property, using type-aware equality.
 func valuesEqual(propType string, local, remote interface{}) bool {
 	switch propType {
-	case "title", "select", "status", "url", "email", "phone_number":
-		// Scalar strings: a cleared value is nil from Notion's decode but may be
-		// "" locally. coerceString folds nil→"" so they compare equal.
+	case "title", "rich_text", "select", "status", "url", "email", "phone_number":
+		// Scalar / rendered-Markdown strings: a cleared value is nil from Notion's
+		// decode but may be "" locally. coerceString folds nil→"" so they compare
+		// equal. rich_text compares as the Markdown string ConvertRichText renders
+		// on both sides, so the diff is invariant to re-segmentation.
 		return coerceString(local) == coerceString(remote)
 	case "multi_select":
 		// Unordered set in Notion — a reorder is not a change.
@@ -496,9 +490,9 @@ func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.Da
 // buildPropertyPayloadFor is buildPropertyPayload restricted to a set of keys.
 // A nil `only` means "every pushable field" (the --force overwrite-blind path);
 // a non-nil `only` restricts the payload to exactly those keys — the changed-
-// field set from the diff (DAG n33). Restricting to changed fields also means a
-// rich_text field that the diff skips never reaches the payload on a mixed edit,
-// so a scalar change can't drag a formatting-corrupting rich_text push along.
+// field set from the diff (DAG n33). rich_text now diffs and sends like any other
+// field (#95 un-skip): an unchanged rich_text cell is simply absent from the
+// changed set, so it never reaches the payload on a mixed edit.
 func buildPropertyPayloadFor(fm map[string]interface{}, schema map[string]notion.DatabaseProperty, only []string) (map[string]interface{}, []string) {
 	var onlySet map[string]bool
 	if only != nil {
@@ -534,14 +528,12 @@ func buildPropertyPayloadFor(fm map[string]interface{}, schema map[string]notion
 func buildPropertyValue(propType string, val interface{}) interface{} {
 	switch propType {
 	case "title", "rich_text":
+		// Deserialize the Markdown back into a Notion rich-text array (#95 Gap 2)
+		// so inline formatting round-trips instead of landing as literal markers.
+		// An empty value yields an empty array, which clears the cell.
 		s := coerceString(val)
 		return map[string]interface{}{
-			propType: []interface{}{
-				map[string]interface{}{
-					"type": "text",
-					"text": map[string]interface{}{"content": s},
-				},
-			},
+			propType: richTextPayload(markdown.ParseRichText(s)),
 		}
 
 	case "number":
@@ -623,6 +615,49 @@ func buildPropertyValue(propType string, val interface{}) interface{} {
 		return map[string]interface{}{"relation": rels}
 	}
 	return nil
+}
+
+// richTextPayload converts parsed rich-text segments (#95) into the Notion API
+// array form for a title/rich_text property update. An empty slice yields an
+// empty array, which clears the property in Notion.
+func richTextPayload(segs []notion.RichText) []interface{} {
+	out := make([]interface{}, 0, len(segs))
+	for _, s := range segs {
+		text := map[string]interface{}{"content": ""}
+		if s.Text != nil {
+			text["content"] = s.Text.Content
+			if s.Text.Link != nil {
+				text["link"] = map[string]interface{}{"url": s.Text.Link.URL}
+			}
+		}
+		seg := map[string]interface{}{"type": "text", "text": text}
+		if ann := annotationsPayload(s.Annotations); ann != nil {
+			seg["annotations"] = ann
+		}
+		out = append(out, seg)
+	}
+	return out
+}
+
+// annotationsPayload returns the Notion annotations object for a segment, or nil
+// when every annotation is at its default — plain text then sends no annotations
+// object, matching the minimal payload the pre-#95 plain-text push produced.
+func annotationsPayload(a notion.Annotations) map[string]interface{} {
+	color := a.Color
+	if color == "" {
+		color = "default"
+	}
+	if !a.Bold && !a.Italic && !a.Strikethrough && !a.Underline && !a.Code && color == "default" {
+		return nil
+	}
+	return map[string]interface{}{
+		"bold":          a.Bold,
+		"italic":        a.Italic,
+		"strikethrough": a.Strikethrough,
+		"underline":     a.Underline,
+		"code":          a.Code,
+		"color":         color,
+	}
 }
 
 func parseDatePayload(s string) interface{} {
