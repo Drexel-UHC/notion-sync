@@ -67,6 +67,24 @@ func BuildPushQueue(folderPath string) (*PushPreview, error) {
 	return preview, nil
 }
 
+// pushedFields is the field list recorded in a row's PushedEntry (DAG n41).
+// On the gate path changedFields is the authoritative re-diff, so it's used
+// verbatim (preserving its order). Under --force changedFields is nil — the
+// blind-overwrite path sends every pushable field — so the payload's keys
+// (sorted, deterministic) stand in. Never returns nil: an empty payload can't
+// reach here (it's filtered to skippedNoOp upstream), so Fields is non-null.
+func pushedFields(changedFields []string, properties map[string]interface{}) []string {
+	if len(changedFields) > 0 {
+		return changedFields
+	}
+	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // PushDatabase pushes local frontmatter property changes back to Notion.
 // Only page properties are updated; page body content is never modified.
 func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, error) {
@@ -123,6 +141,19 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		return nil, err
 	}
 
+	// Phase 4 (DAG n41): record the deliberately-ignored files — AGENTS.md and
+	// soft-deleted rows — for the summary's skippedNonRow[]. Read off the same
+	// classifier report that feeds the gate, so it's populated on every path
+	// (halt, --force, normal) without a second folder walk.
+	for _, f := range report.Files {
+		switch f.Class {
+		case ClassSkipAgentsMD:
+			result.SkippedNonRow = append(result.SkippedNonRow, SkippedNonRowEntry{File: filepath.Base(f.Path), Reason: "AGENTS.md"})
+		case ClassSkipDeleted:
+			result.SkippedNonRow = append(result.SkippedNonRow, SkippedNonRowEntry{File: filepath.Base(f.Path), Reason: "notion-deleted"})
+		}
+	}
+
 	// Validation gate (DAG n21+n22). All-or-nothing: any halt-class file
 	// across the whole folder aborts before any Notion write. --force ran the
 	// walk network-free, so report.Halted is false and this branch is skipped.
@@ -153,6 +184,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		}
 
 		notionID := f.NotionID
+		base := filepath.Base(f.Path)
 		localLastEdited, _ := f.fm["notion-last-edited"].(string)
 
 		// Per-cell diff (DAG n31/n32): compare local frontmatter to the snapshot
@@ -169,6 +201,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		if !opts.Force {
 			if len(diffRow(f.fm, f.page, schema)) == 0 {
 				result.SkippedNoOp++
+				result.SkippedNoOpFiles = append(result.SkippedNoOpFiles, base)
 				continue
 			}
 
@@ -179,12 +212,24 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			page, err := opts.Client.GetPage(notionID)
 			if err != nil {
 				result.Failed++
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.Path), err))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", base, err))
+				result.FailedRows = append(result.FailedRows, FailedEntry{
+					File:   base,
+					Reason: fmt.Sprintf("could not re-fetch the row before writing: %v", err),
+					Fix:    "check network / Notion availability, then re-run",
+				})
 				continue
 			}
 			if !timestampsEqual(localLastEdited, page.LastEditedTime) {
+				// n32c mid-run race: continue-class, same as n34c. Counted as a
+				// conflict for the human view and as a failed row for the summary.
 				result.Conflicts++
-				result.ConflictFiles = append(result.ConflictFiles, filepath.Base(f.Path))
+				result.ConflictFiles = append(result.ConflictFiles, base)
+				result.FailedRows = append(result.FailedRows, FailedEntry{
+					File:   base,
+					Reason: fmt.Sprintf("row changed in Notion mid-run (local %s, Notion %s)", localLastEdited, page.LastEditedTime),
+					Fix:    "run `notion-sync refresh` to reconcile, then push again",
+				})
 				continue
 			}
 			notionPage = page
@@ -195,6 +240,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			changedFields = diffRow(f.fm, page, schema)
 			if len(changedFields) == 0 {
 				result.SkippedNoOp++
+				result.SkippedNoOpFiles = append(result.SkippedNoOpFiles, base)
 				continue
 			}
 		}
@@ -205,20 +251,28 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		if len(validationErrs) > 0 {
 			result.Failed++
 			for _, e := range validationErrs {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", filepath.Base(f.Path), e))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", base, e))
 			}
+			result.FailedRows = append(result.FailedRows, FailedEntry{
+				File:   base,
+				Reason: strings.Join(validationErrs, "; "),
+				Fix:    "fix the field value(s) to match the schema, then re-run",
+			})
 			continue
 		}
 		// With the payload narrowed to changedFields, an empty payload means the
 		// only changed field can't be expressed as a write (e.g. a buildPropertyValue
-		// that returns nil) — count it Skipped rather than push an empty PATCH.
+		// that returns nil) — count it Skipped rather than push an empty PATCH. For
+		// the summary this is a no-op outcome (nothing reached Notion).
 		if len(properties) == 0 {
 			result.Skipped++
+			result.SkippedNoOpFiles = append(result.SkippedNoOpFiles, base)
 			continue
 		}
 
 		if opts.DryRun {
 			result.Pushed++
+			result.PushedRows = append(result.PushedRows, PushedEntry{File: base, Fields: pushedFields(changedFields, properties)})
 			continue
 		}
 
@@ -234,7 +288,12 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			}
 			// n34c: per-row 4xx / exhausted-transient — loud-fail, keep going.
 			result.Failed++
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.Path), err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", base, err))
+			result.FailedRows = append(result.FailedRows, FailedEntry{
+				File:   base,
+				Reason: err.Error(),
+				Fix:    "review Notion's error, fix the field or token permissions, then re-push",
+			})
 			continue
 		}
 
@@ -260,7 +319,12 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 				for _, m := range mismatches {
 					parts = append(parts, fmt.Sprintf("%s (sent %q, stored %q)", m.Field, m.Sent, m.Stored))
 				}
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: Notion stored %s differently than sent — not restamped; re-check and re-push", filepath.Base(f.Path), strings.Join(parts, ", ")))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: Notion stored %s differently than sent — not restamped; re-check and re-push", base, strings.Join(parts, ", ")))
+				result.FailedRows = append(result.FailedRows, FailedEntry{
+					File:   base,
+					Reason: fmt.Sprintf("Notion stored %s differently than sent", strings.Join(parts, ", ")),
+					Fix:    "re-check the field value and re-push",
+				})
 				continue
 			}
 		}
@@ -273,7 +337,7 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 				// Non-fatal: push succeeded; we just couldn't refetch the precise
 				// timestamp. Surface it so silent failures don't quietly reintroduce
 				// the quantized-timestamp bug this code exists to avoid.
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", filepath.Base(f.Path), refetchErr))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", base, refetchErr))
 			}
 			if updated != nil && updated.LastEditedTime != "" {
 				newLastEdited = updated.LastEditedTime
@@ -285,10 +349,11 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		pushedAt := time.Now().UTC().Format(time.RFC3339)
 		if err := updateAfterPush(f.Path, newLastEdited, pushedAt); err != nil {
 			// Non-fatal: push succeeded, just couldn't update local timestamps.
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: update timestamps: %v", filepath.Base(f.Path), err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: update timestamps: %v", base, err))
 		}
 
 		result.Pushed++
+		result.PushedRows = append(result.PushedRows, PushedEntry{File: base, Fields: pushedFields(changedFields, properties)})
 	}
 
 	if onProgress != nil {

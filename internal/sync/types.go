@@ -114,4 +114,15 @@ type PushResult struct {
 	// the one-line reason+fix surfaced once, instead of once per remaining row.
 	AuthHalted bool
 	AuthError  string
+
+	// Phase 4 (DAG n41) structured detail backing the JSON run summary. These
+	// are populated in lockstep with the count fields above at each terminal
+	// site — the same discipline classifyFolder uses to keep Halted in step
+	// with its appends. The counts drive the human-readable renderer; these
+	// slices drive Summary()'s machine-readable contract.
+	Cancelled        bool                 // user declined at the confirmation gate (DAG n13a)
+	PushedRows       []PushedEntry        // one per Pushed row, with the fields sent
+	SkippedNoOpFiles []string             // basenames of rows skipped as no-ops
+	SkippedNonRow    []SkippedNonRowEntry // AGENTS.md / notion-deleted files
+	FailedRows       []FailedEntry        // continue-class per-row failures
 }

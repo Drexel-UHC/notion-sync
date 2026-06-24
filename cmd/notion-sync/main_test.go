@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -420,6 +421,49 @@ func TestRenderAuthHaltedResult_ShowsErrorAndPartialProgress(t *testing.T) {
 	}
 	if !strings.Contains(out, "authentication failed") {
 		t.Errorf("expected the auth error reason+fix in the output, got:\n%s", out)
+	}
+}
+
+// Phase 4 (DAG n41): the run summary prints the machine-readable JSON object
+// FIRST (so an agent piping stdout parses the leading complete object — Option
+// A), then a divider rule, leaving the human-readable counts to print after.
+// Uses json.Decoder.Decode, which reads exactly the first JSON value from the
+// stream — the precise contract an agent consumer relies on.
+func TestRenderRunSummary_n41_JSONFirstThenDivider(t *testing.T) {
+	summary := sync.RunSummary{
+		Status:        "partial",
+		Pushed:        []sync.PushedEntry{{File: "a.md", Fields: []string{"title"}}},
+		SkippedNoOp:   []string{},
+		SkippedNonRow: []sync.SkippedNonRowEntry{},
+		Failed:        []sync.FailedEntry{{File: "b.md", Reason: "x", Fix: "y"}},
+		Halted:        []sync.HaltedEntry{},
+	}
+
+	var buf bytes.Buffer
+	if err := renderRunSummary(summary, &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+
+	// Leading content is the JSON object — first non-space byte is '{'.
+	if !strings.HasPrefix(strings.TrimLeft(out, " \t\r\n"), "{") {
+		t.Errorf("expected output to lead with a JSON object, got:\n%s", out)
+	}
+	// The leading complete JSON object decodes and round-trips the status.
+	var got sync.RunSummary
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&got); err != nil {
+		t.Fatalf("leading JSON object did not decode: %v\n%s", err, out)
+	}
+	if got.Status != "partial" {
+		t.Errorf("decoded status = %q, want partial", got.Status)
+	}
+	if len(got.Failed) != 1 || got.Failed[0].File != "b.md" {
+		t.Errorf("decoded failed = %+v, want one entry for b.md", got.Failed)
+	}
+	// A divider rule follows the JSON, separating it from the human counts the
+	// caller prints next.
+	if !strings.Contains(out, "─") {
+		t.Errorf("expected a divider rule after the JSON, got:\n%s", out)
 	}
 }
 

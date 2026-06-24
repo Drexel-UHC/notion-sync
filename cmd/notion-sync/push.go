@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,27 @@ import (
 	"github.com/ran-codes/notion-sync/internal/notion"
 	"github.com/ran-codes/notion-sync/internal/sync"
 )
+
+// summaryDivider separates the machine-readable JSON run summary from the
+// human-readable counts that follow it. Decorative only — the JSON above is a
+// single complete object an agent parses on its own (Option A), so a change to
+// this rule never affects parsing.
+const summaryDivider = "─────────────────────────────────────────"
+
+// renderRunSummary writes the agent-readable JSON run summary (DAG n41) FIRST,
+// then the divider, leaving the caller to print the human-readable counts after
+// (so a terminal user sees the human summary at the bottom while an agent
+// piping stdout parses the leading JSON object). The JSON is pretty-printed —
+// still a single valid leading object under the "parse first {...}" contract.
+func renderRunSummary(summary sync.RunSummary, w io.Writer) error {
+	b, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, string(b))
+	fmt.Fprintln(w, summaryDivider)
+	return nil
+}
 
 // confirmPush previews the push queue to stderr and gates execution on user
 // consent. Returns true if push should proceed, false to cancel cleanly
@@ -126,16 +148,22 @@ func runPush(args []string) error {
 			return nil
 		}
 		if !confirmPush(preview, yesFlag, isStdinTTY(), os.Stdin, os.Stderr) {
+			// DAG n13a: the run summary is emitted on every terminal path —
+			// cancel included — so an agent piping stdout always gets a status.
+			_ = renderRunSummary((&sync.PushResult{Cancelled: true}).Summary(), os.Stdout)
 			return nil
 		}
 	}
 
+	// Progress chatter goes to stderr so stdout leads with the JSON run summary
+	// (DAG n41): an agent piping stdout parses the first complete JSON object
+	// without tripping over banners or the \r progress line.
 	if *dryRun {
-		fmt.Println("Pushing properties (dry run)...")
+		fmt.Fprintln(os.Stderr, "Pushing properties (dry run)...")
 	} else if forceFlag {
-		fmt.Println("Force pushing properties (ignoring conflicts)...")
+		fmt.Fprintln(os.Stderr, "Force pushing properties (ignoring conflicts)...")
 	} else {
-		fmt.Println("Pushing properties to Notion...")
+		fmt.Fprintln(os.Stderr, "Pushing properties to Notion...")
 	}
 
 	client := notion.NewClient(key)
@@ -151,15 +179,23 @@ func runPush(args []string) error {
 		if p.Phase == sync.PhasePushing {
 			dbTitle = p.Title
 		}
-		fmt.Printf("\r%-60s", formatPushProgress(p, dbTitle))
+		fmt.Fprintf(os.Stderr, "\r%-60s", formatPushProgress(p, dbTitle))
 	})
 
 	if err != nil {
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
 		return err
 	}
 
-	fmt.Println()
+	fmt.Fprintln(os.Stderr)
+
+	// DAG n41: emit the machine-readable run summary FIRST (the single sink every
+	// terminal path drains into), then the human-readable blocks below the
+	// divider. The human blocks stay on stdout so a terminal user sees them at
+	// the bottom while an agent reads the leading JSON object.
+	if err := renderRunSummary(result.Summary(), os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not render run summary JSON: %v\n", err)
+	}
 
 	// Validation halted (DAG n22a) — print the enumerated halt list and
 	// exit non-zero so scripts/CI can detect the abort. No "Done"

@@ -2125,3 +2125,139 @@ func TestPushDatabase_DataSourceWithEmptySchemaErrors(t *testing.T) {
 		t.Errorf("expected error to mention missing schema, got: %v", err)
 	}
 }
+
+// --- Phase 4 (DAG n41): PushDatabase populates the structured run-summary detail ---
+
+// A successful push records a PushedRows entry naming the file (basename) and
+// the exact fields that were sent — the per-row detail the JSON summary needs.
+func TestPushDatabase_n41_RecordsPushedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"Status: Done\n" + // unchanged vs snapshot
+		"Priority: 5\n" + // changed (snapshot has 2)
+		"---\n# Content\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status":   {Type: "select"},
+			"Priority": {Type: "number"},
+		},
+	}
+	prio := 2.0
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status":   {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+			"Priority": {Type: "number", Number: &prio},
+		},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.PushedRows) != 1 {
+		t.Fatalf("expected 1 PushedRows entry, got %d (%+v)", len(result.PushedRows), result.PushedRows)
+	}
+	entry := result.PushedRows[0]
+	if entry.File != "page-001.md" {
+		t.Errorf("PushedRows file = %q, want basename page-001.md", entry.File)
+	}
+	if len(entry.Fields) != 1 || entry.Fields[0] != "Priority" {
+		t.Errorf("PushedRows fields = %v, want only the changed field [Priority]", entry.Fields)
+	}
+}
+
+// AGENTS.md and soft-deleted files are intentionally not rows — push records
+// them in SkippedNonRow with the right reason so the summary distinguishes
+// "deliberately ignored" from "nothing changed".
+func TestPushDatabase_n41_RecordsSkippedNonRow(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"AGENTS.md": "# generated guide\n",
+		"gone.md": "---\nnotion-id: page-gone\nnotion-last-edited: 2024-01-01T00:00:00Z\n" +
+			"notion-deleted: true\nStatus: Done\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reasons := map[string]string{}
+	for _, e := range result.SkippedNonRow {
+		reasons[e.File] = e.Reason
+	}
+	if reasons["AGENTS.md"] != "AGENTS.md" {
+		t.Errorf("expected AGENTS.md skipped with reason AGENTS.md, got %+v", result.SkippedNonRow)
+	}
+	if reasons["gone.md"] != "notion-deleted" {
+		t.Errorf("expected gone.md skipped with reason notion-deleted, got %+v", result.SkippedNonRow)
+	}
+}
+
+// A per-row 4xx records a FailedRows entry with file, reason, and a non-empty
+// fix — the actionable triad the summary's failed[] array carries.
+func TestPushDatabase_n41_RecordsFailedWithReasonAndFix(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-bad\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-bad"] = &notion.Page{
+		ID: "page-bad", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	client.updateErrors["page-bad"] = &notion.ErrorResponse{
+		Status: 400, Code: "validation_error", Message: "body failed validation",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("a per-row 4xx must not be a run-level error: %v", err)
+	}
+	if len(result.FailedRows) != 1 {
+		t.Fatalf("expected 1 FailedRows entry, got %d (%+v)", len(result.FailedRows), result.FailedRows)
+	}
+	f := result.FailedRows[0]
+	if f.File != "bad.md" {
+		t.Errorf("FailedRows file = %q, want bad.md", f.File)
+	}
+	if !strings.Contains(f.Reason, "validation") {
+		t.Errorf("FailedRows reason = %q, want it to carry Notion's message", f.Reason)
+	}
+	if f.Fix == "" {
+		t.Error("FailedRows entry must carry a non-empty fix")
+	}
+}
