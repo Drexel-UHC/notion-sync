@@ -96,8 +96,8 @@ PDF:
 
 | Notion type                     | Frontmatter value                          | Pushable? |
 | ------------------------------- | ------------------------------------------ | --------- |
-| ` + "`title`" + `                         | named title-property key in frontmatter (database entries); filename for standalone pages | yes |
-| ` + "`rich_text`" + `                     | plain markdown string                      | yes |
+| ` + "`title`" + `                         | named title-property key in frontmatter (database entries); filename for standalone pages | yes — text only, see *Rich-text fidelity on push* |
+| ` + "`rich_text`" + `                     | plain markdown string                      | yes — text only, see *Rich-text fidelity on push* |
 | ` + "`number`" + `                        | number or ` + "`null`" + `                            | yes |
 | ` + "`select`" + `                        | option name or ` + "`null`" + `                       | yes |
 | ` + "`multi_select`" + `                  | array of option names                      | yes |
@@ -194,6 +194,17 @@ Key facts for downstream agents:
 - After a successful push, the tool writes ` + "`notion-last-pushed: <timestamp>`" + ` into the file's frontmatter and updates ` + "`notion-last-edited`" + ` to the post-push value returned by Notion.
 - Files with ` + "`notion-deleted: true`" + ` are never pushed.
 - ` + "`push --dry-run`" + ` reports what would be pushed without making any Notion API calls.
+
+### Rich-text fidelity on push
+
+` + "`title`" + ` and ` + "`rich_text`" + ` ("Text") values are stored in your ` + "`.md`" + ` as a **flat Markdown string** — on import Notion's structured formatting is *rendered* to Markdown syntax (e.g. ` + "`**bold**`" + `, ` + "`[text](url)`" + `). Inline formatting (bold, italic, code, strikethrough, highlight, underline, links) is preserved as Markdown and pushed back as formatting.
+
+Two attributes are **lost at import and therefore can never be restored on push** — they are not in your ` + "`.md`" + ` at all, so no push can reconstruct them:
+
+- **Foreground (text) color** — only *background* highlight survives (as ` + "`==text==`" + `); a colored *text* run keeps its words but loses the color.
+- **` + "`@user`" + ` mention identity** — a user mention is rendered as ` + "`@name`" + `; the user's Notion ID is not retained, so push cannot re-link the mention.
+
+Push does **not** claim to round-trip these. Don't expect a pushed cell to restore the original text color or re-link an ` + "`@user`" + ` mention. (Highlight color is also normalized — any background color round-trips as a single highlight, not its original shade.)
 `
 
 // WriteAgentsMD writes the generated AGENTS.md to the workspace root.
