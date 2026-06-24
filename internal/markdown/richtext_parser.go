@@ -9,7 +9,7 @@ import (
 // ParseRichText is the inverse of ConvertRichText: it deserializes a Markdown
 // inline string back into a Notion rich-text array. It exists so an edited
 // rich_text / title cell round-trips with formatting intact on push instead of
-// landing in Notion as literal markers (e.g. "**bold**" as five plain chars).
+// landing in Notion as literal markers (e.g. "**bold**" as 8 plain characters).
 // See issue #95 (Gap 2).
 //
 // Recognized inline syntax (the inverse of what ConvertRichText emits):
@@ -27,10 +27,22 @@ import (
 // flat rich-text model. Color/`@user` mention identity are intentionally NOT
 // handled — they are lost on import (Gap 1) and documented as not round-tripped.
 //
-// Known limitation: ConvertRichText does not escape marker characters, so a cell
-// whose literal text contains an unbalanced "*", "`", etc. is ambiguous and may
-// not round-trip exactly. This is shared with the renderer (which emits those
-// characters raw) rather than introduced here.
+// Known limitation — unbalanced markers corrupt content. The parser uses a flat
+// toggle model with NO balance checking, so any lone "*", "==", "`", "~~", or
+// "<u>" in ordinary cell text is treated as a formatting toggle. This is not mere
+// imprecise round-tripping: on valid input the parser actively FABRICATES
+// formatting and DROPS the orphan delimiter, e.g.
+//
+//	"2 * 3 = 6"     → " 3 = 6" emitted italic; the literal "*" is dropped
+//	"100% == done"  → " done" gets a phantom yellow_background highlight
+//	"a*b*c*d"       → alternating italic runs; all three "*" deleted
+//
+// Multiplication, globs, footnote asterisks, and "100% ==" are real database cell
+// values, so this MUST be fixed (track open delimiter positions; treat a marker
+// left unclosed at EOF as literal text) BEFORE this parser is wired into push,
+// or it reintroduces the cell corruption #95 set out to fix. It is unwired today
+// — ParseRichText has zero production callers (wiring is deferred to epic #55) —
+// so the corruption is latent, not live.
 //
 // Pure function — no push wiring lives here.
 func ParseRichText(md string) []notion.RichText {
