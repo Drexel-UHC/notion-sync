@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -152,13 +154,22 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		notionID := f.NotionID
 		localLastEdited, _ := f.fm["notion-last-edited"].(string)
 
-		// TOCTOU defense: the validation gate already covered the !Force
-		// common case, but Notion could be edited in the window between
-		// the gate's GetPage and this one. The gate makes per-row halts
-		// nearly impossible in practice; this catches the rare race so
-		// we never overwrite a freshly-edited row.
+		// Per-cell diff (DAG n31/n32): compare local frontmatter to the snapshot
+		// the gate already stashed. Empty diff → nothing changed → skippedNoOp
+		// (n32a), and we skip the TOCTOU re-fetch entirely — only rows that
+		// actually change pay for the second GetPage (decision #2). --force has no
+		// stash and deliberately overwrites, so it bypasses the diff.
 		var notionPage *notion.Page
 		if !opts.Force {
+			if len(diffRow(f.fm, f.page, schema)) == 0 {
+				result.SkippedNoOp++
+				continue
+			}
+
+			// TOCTOU defense (n32b): the row changed locally, so re-fetch fresh
+			// right before writing. Notion has no conditional write — a moved
+			// timestamp here means it was edited since the gate read it (n32c),
+			// so skip to avoid clobbering rather than overwrite blind.
 			page, err := opts.Client.GetPage(notionID)
 			if err != nil {
 				result.Failed++
@@ -236,6 +247,139 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 	return result, nil
 }
 
+// diffRow returns the schema-backed property keys whose local frontmatter value
+// differs from the gate's stashed Notion snapshot (DAG n31). Pure, no I/O.
+//
+// It mirrors buildPropertyPayload's iteration (same notion-key / read-only-type
+// skips) so the diff can never flag a field the push wouldn't actually send.
+// rich_text is additionally skipped — the deliberate "3a skip" (issue #55):
+// pushing rich_text as literal plain text corrupts formatting, so until #95's
+// parser is wired a rich-text-only edit must not count as a change. The snapshot
+// is decoded with mapPropertiesToFrontmatter so both sides are compared in the
+// same frontmatter representation they were imported in.
+func diffRow(fm map[string]interface{}, snapshot *notion.Page, schema map[string]notion.DatabaseProperty) []string {
+	remote := map[string]interface{}{}
+	if snapshot != nil {
+		mapPropertiesToFrontmatter(snapshot.Properties, remote, false)
+	}
+	var changed []string
+	for key, localVal := range fm {
+		prop, ok := pushableField(key, schema)
+		if !ok {
+			continue
+		}
+		// The deliberate "3a skip": rich_text is excluded from the diff (but not
+		// from buildPropertyPayload's send) until #95's parser lands, so a
+		// rich_text-only edit is a no-op instead of a formatting-corrupting push.
+		if prop.Type == "rich_text" {
+			continue
+		}
+		if !valuesEqual(prop.Type, localVal, remote[key]) {
+			changed = append(changed, key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// pushableField reports whether a frontmatter key maps to a schema property the
+// push may write, returning that property. It centralizes the skip rules
+// (notion-managed keys, keys absent from the schema, read-only/native types) so
+// diffRow and buildPropertyPayload can never drift on what counts as pushable —
+// the diff must never flag a field the push wouldn't actually send.
+func pushableField(key string, schema map[string]notion.DatabaseProperty) (notion.DatabaseProperty, bool) {
+	if pushNotionKeys[key] {
+		return notion.DatabaseProperty{}, false
+	}
+	prop, ok := schema[key]
+	if !ok {
+		return notion.DatabaseProperty{}, false
+	}
+	if pushSkipTypes[prop.Type] {
+		return notion.DatabaseProperty{}, false
+	}
+	return prop, true
+}
+
+// valuesEqual reports whether a local frontmatter value and the decoded Notion
+// snapshot value represent the same stored property, using type-aware equality.
+func valuesEqual(propType string, local, remote interface{}) bool {
+	switch propType {
+	case "title", "select", "status", "url", "email", "phone_number":
+		// Scalar strings: a cleared value is nil from Notion's decode but may be
+		// "" locally. coerceString folds nil→"" so they compare equal.
+		return coerceString(local) == coerceString(remote)
+	case "multi_select":
+		// Unordered set in Notion — a reorder is not a change.
+		return stringSetsEqual(coerceStringSlice(local), coerceStringSlice(remote))
+	case "date":
+		// Normalize both sides the same way the push would send (midnight-UTC
+		// demoted to date-only) so yaml's RFC3339 promotion isn't a false diff.
+		return normalizeDate(coerceString(local)) == normalizeDate(coerceString(remote))
+	case "number":
+		// yaml yields int for whole numbers; Notion's decode yields float64.
+		// Compare numerically so the Go type difference isn't a false diff.
+		return numbersEqual(local, remote)
+	}
+	return reflect.DeepEqual(local, remote)
+}
+
+// numbersEqual compares two number values across Go types (yaml's int vs
+// Notion's float64). A nil on exactly one side is a real change (cleared vs set);
+// nil on both is equal.
+func numbersEqual(a, b interface{}) bool {
+	af, aok := toFloat(a)
+	bf, bok := toFloat(b)
+	if !aok || !bok {
+		return aok == bok
+	}
+	return af == bf
+}
+
+func toFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
+// normalizeDate demotes midnight-UTC datetimes to date-only on each end of a
+// (possibly ranged) date string, mirroring parseDatePayload so the diff compares
+// values in the exact form the push would send them.
+func normalizeDate(s string) string {
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, " → ") {
+		parts := strings.SplitN(s, " → ", 2)
+		return stripMidnightUTC(strings.TrimSpace(parts[0])) + " → " + stripMidnightUTC(strings.TrimSpace(parts[1]))
+	}
+	return stripMidnightUTC(s)
+}
+
+// stringSetsEqual reports whether two string slices contain the same members
+// regardless of order. Used for multi_select, which Notion stores unordered.
+func stringSetsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // buildPropertyPayload constructs the Notion API property update payload from frontmatter.
 // Uses the database schema to determine property types; skips read-only / Notion-native properties.
 var pushNotionKeys = map[string]bool{
@@ -256,14 +400,8 @@ func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.Da
 	result := make(map[string]interface{})
 	var errs []string
 	for key, val := range fm {
-		if pushNotionKeys[key] {
-			continue
-		}
-		prop, ok := schema[key]
+		prop, ok := pushableField(key, schema)
 		if !ok {
-			continue
-		}
-		if pushSkipTypes[prop.Type] {
 			continue
 		}
 		if prop.Type == "rich_text" || prop.Type == "title" {

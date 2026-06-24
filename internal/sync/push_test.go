@@ -321,6 +321,209 @@ func TestBuildPropertyValue_Relation(t *testing.T) {
 	}
 }
 
+// --- diffRow tests (phase 3a — per-cell diff, DAG n31/n32) ---
+
+// n31 tracer: a scalar whose local value differs from the gate's snapshot
+// shows up in changedFields.
+func TestDiffRow_n31_DetectsChangedScalar(t *testing.T) {
+	score := 3.0
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Score": {Type: "number", Number: &score},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Score": {Type: "number"}}
+	fm := map[string]interface{}{"Score": 5.0}
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 1 || got[0] != "Score" {
+		t.Errorf("expected [Score], got %v", got)
+	}
+}
+
+// n31: yaml parses a whole number as int, but Notion's decode yields float64.
+// They're the same value — diff must compare numerically, not by Go type, or
+// every integer-valued number field would falsely diff on every push.
+func TestDiffRow_n31_IntFloatNumberEquality(t *testing.T) {
+	n := 2.0
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Priority": {Type: "number", Number: &n},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Priority": {Type: "number"}}
+	fm := map[string]interface{}{"Priority": 2} // yaml-parsed int
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected int 2 to equal float64 2.0 (no change), got %v", got)
+	}
+}
+
+// n32a basis: a row identical to the snapshot has no changed fields, so the
+// push loop can skip it (skippedNoOp).
+func TestDiffRow_n32a_IdenticalRowReturnsEmpty(t *testing.T) {
+	score := 5.0
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Score": {Type: "number", Number: &score},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Score": {Type: "number"}}
+	fm := map[string]interface{}{"Score": 5.0}
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected no changed fields, got %v", got)
+	}
+}
+
+// n31: a cleared scalar is represented as nil by Notion's decode but may be an
+// empty string locally (or vice versa). They mean the same "no value" — diff
+// must not flag it, or every cleared field would push on every run.
+func TestDiffRow_n31_ClearedScalarNilEqualsEmpty(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Stage": {Type: "select", Select: nil}, // cleared in Notion → decodes to nil
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Stage": {Type: "select"}}
+	fm := map[string]interface{}{"Stage": ""} // empty locally
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected nil/empty to be equal (no change), got %v", got)
+	}
+}
+
+// n31: multi_select is an unordered set in Notion. A reorder (same members,
+// different order) is not a change.
+func TestDiffRow_n31_MultiSelectReorderIsNoChange(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Tags": {Type: "multi_select", MultiSelect: []notion.SelectValue{
+				{Name: "b"}, {Name: "a"},
+			}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Tags": {Type: "multi_select"}}
+	fm := map[string]interface{}{"Tags": []interface{}{"a", "b"}}
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected reorder to be no change, got %v", got)
+	}
+}
+
+// n31: yaml.v3 promotes a date-only local scalar to "2024-01-01T00:00:00Z"
+// while Notion stores/returns "2024-01-01". Without identical normalization on
+// both sides every date-only row would falsely diff on every push. The diff
+// must demote midnight-UTC the same way buildPropertyValue does before sending.
+func TestDiffRow_n31_DateMidnightNormalizationIsNoChange(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Due": {Type: "date", Date: &notion.DateValue{Start: "2024-01-01"}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Due": {Type: "date"}}
+	fm := map[string]interface{}{"Due": "2024-01-01T00:00:00Z"} // yaml-promoted local
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected midnight-UTC date to equal date-only (no change), got %v", got)
+	}
+}
+
+// n31: the deliberate "3a skip" — rich_text is excluded from the diff until
+// #95's parser lands. Even a genuine rich_text edit must not count as a change,
+// so it never triggers the formatting-corrupting literal-plain push.
+func TestDiffRow_n31_RichTextExcludedFromDiff(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Notes": {Type: "rich_text", RichText: []notion.RichText{
+				{Type: "text", PlainText: "old", Text: &notion.TextContent{Content: "old"}},
+			}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Notes": {Type: "rich_text"}}
+	fm := map[string]interface{}{"Notes": "new text"} // changed locally
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 0 {
+		t.Errorf("expected rich_text to be excluded from diff, got %v", got)
+	}
+}
+
+// n31: title is compared as plain text (not skipped like rich_text) so renames
+// are detected.
+func TestDiffRow_n31_TitleChangeDetected(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Name": {Type: "title", Title: []notion.RichText{
+				{Type: "text", PlainText: "Old", Text: &notion.TextContent{Content: "Old"}},
+			}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Name": {Type: "title"}}
+	fm := map[string]interface{}{"Name": "New"}
+
+	got := diffRow(fm, snapshot, schema)
+	if len(got) != 1 || got[0] != "Name" {
+		t.Errorf("expected [Name], got %v", got)
+	}
+}
+
+// n32a wiring: a row whose local frontmatter already matches Notion's stored
+// values produces no diff, so the push loop skips it as skippedNoOp and never
+// calls UpdatePage — no redundant write, no wasted timestamp churn.
+func TestPushDatabase_n32a_UnchangedRowSkippedNoOp_NoUpdatePageCall(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"Priority: 2\n" +
+		"---\n# Content\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status":   {Type: "select"},
+			"Priority": {Type: "number"},
+		},
+	}
+	prio := 2.0
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status":   {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+			"Priority": {Type: "number", Number: &prio},
+		},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 0 {
+		t.Errorf("expected 0 pushed, got %d", result.Pushed)
+	}
+	if result.SkippedNoOp != 1 {
+		t.Errorf("expected 1 skippedNoOp, got %d", result.SkippedNoOp)
+	}
+	if len(client.updateRequests) != 0 {
+		t.Errorf("expected 0 UpdatePage calls, got %d", len(client.updateRequests))
+	}
+}
+
 // --- PushDatabase integration tests ---
 
 func TestPushDatabase_PushesProperties(t *testing.T) {
@@ -498,9 +701,9 @@ func TestPushDatabase_ValidationHaltAbortsRun_NoUpdatePageCalls(t *testing.T) {
 	// One ready file + one stray (n21e halt) + one conflict (n21d halt).
 	// All three classified in one pass; the run must NOT push the ready one.
 	files := map[string]string{
-		"ready.md":      "---\nnotion-id: page-ready\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
-		"stray.md":      "---\ntitle: stray\n---\n",
-		"conflict.md":   "---\nnotion-id: page-conflict\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
+		"ready.md":    "---\nnotion-id: page-ready\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"stray.md":    "---\ntitle: stray\n---\n",
+		"conflict.md": "---\nnotion-id: page-conflict\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {

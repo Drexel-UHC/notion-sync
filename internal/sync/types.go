@@ -89,11 +89,15 @@ type PushPreview struct {
 
 // PushResult contains the result of a push operation.
 type PushResult struct {
-	Title         string
-	FolderPath    string
-	Total         int
-	Pushed        int
-	Skipped       int
+	Title      string
+	FolderPath string
+	Total      int
+	Pushed     int
+	Skipped    int
+	// SkippedNoOp counts rows whose local frontmatter already matched Notion's
+	// stored values (DAG n32a) — nothing to push, no UpdatePage call made.
+	// Distinct from Skipped, which counts rows with no pushable fields at all.
+	SkippedNoOp   int
 	Conflicts     int
 	Failed        int
 	Errors        []string

@@ -68,6 +68,13 @@ type FileClassification struct {
 	// the linked rows (Ready, Conflict, Unreachable, Deleted); nil for
 	// AGENTS.md, Unreadable, Malformed, and Unexpected.
 	fm map[string]interface{}
+
+	// page is the Notion snapshot the gate fetched while resolving this row,
+	// stashed so the push loop's per-cell diff (DAG n31, decision #2) can
+	// compare against it without a second fetch. Populated only on the gate
+	// path's ClassReady (client != nil, timestamps matched); nil for the
+	// network-free preview / --force path and for every non-Ready class.
+	page *notion.Page
 }
 
 // ValidationReport is the result of n21+n22 across every file in folderPath.
@@ -248,6 +255,7 @@ func classifyFolder(folderPath string, client NotionClient, schema map[string]no
 				Class:    ClassReady,
 				NotionID: notionID,
 				fm:       fm,
+				page:     page,
 			})
 			continue
 		}
