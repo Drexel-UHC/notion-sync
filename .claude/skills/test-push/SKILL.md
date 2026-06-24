@@ -27,8 +27,9 @@ Step-group letters map to the four-phase v1.4.0 push DAG. Each phase PR appends 
 | Phase | DAG nodes | Step prefix | Status |
 |---|---|---|---|
 | 1: Confirmation gate | n12b → n13 → n13a | **G** | ✅ included (PR #77) |
-| 2: Validation halts | n21 series → n22a/b | **V** | ⏳ TODO |
-| 3: Cell-level push + verify | n31 → n37 | **C** | ⏳ TODO |
+| 2: Validation halts | n21 series → n22a/b | **V** | ✅ included |
+| 3a: Per-cell diff + skip no-op rows | n31 → n32a/b/c | **C** | ✅ included (PR #97) |
+| 3b/3c: Per-field payload + store-verify + restamp | n33 → n36a | **C** (later) | ⏳ TODO |
 | 4: Run summary JSON | n41 | **S** | ⏳ TODO |
 
 When adding a phase: append a new `## Phase N — <name>` section with new step IDs (`V1`, `V2`, ... or `C1`, ...). Don't modify existing G/V/C/S blocks unless the phase explicitly redefines that contract.
@@ -111,7 +112,7 @@ The push command iterates **every** `.md` file in the folder and sends each one'
 
 Verify: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run` should show `Push queue (1 file)` listing only the canary.
 
-When phase 3 lands and cell-level diff is in place, this step becomes optional — until then it's the cheapest way to keep the phase-3 fixture intact across phase-1 runs.
+Phase 3a (PR #97) has landed: the cell-level diff now skips unchanged rows, so a full-folder push **without `--force`** no longer clobbers Page 4 — this isolation step is **optional** for non-force runs. A `--force` run still re-sends every row, so keep the isolation for any `--force` step (see C6).
 
 ---
 
@@ -309,12 +310,121 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 ⚠️ Don't mix branches — restoring Score first and then re-importing in step 3 will overwrite your Score edit and round-trip `2222`/`3333` to Notion on the next push.
 
-## Phase 3 — Cell-level push (TODO — added by phase 3 PR)
+## Phase 3a — Per-cell diff + skip no-op rows (DAG n31 → n32a/b/c)
 
-Steps `C1`...`Cn`. Expected coverage (the original #55 symptom):
-- Edit one field locally; push.
-- **Other fields' rich-text formatting (bold, links, mentions) survives on Notion** — the original epic motivation.
-- Untouched fields don't bump `last_edited_time` on Notion's side beyond the changed cell.
+Phase 3a (PR #97) adds a **per-cell diff** against the snapshot the validation gate already stashed, then **skips whole rows that didn't change** (`skippedNoOp`). Three granularities — be precise about which one each step asserts:
+
+- **Diff = per-cell.** `diffRow` compares each schema-backed field local-vs-snapshot and returns the changed keys.
+- **Skip = per-row.** Zero changed cells → the whole row is skipped, no `UpdatePage` call.
+- **Write = whole-row (NOT cell-scoped yet).** A *changed* row still re-sends its **entire** payload — sending only the changed fields is `n33`, deferred to 3b. **Do not assert cell-scoped writes here.**
+
+New summary line this phase introduces: `Unchanged: N (already in sync — nothing to push)`, printed only when `skippedNoOp > 0`. Distinct from `Skipped:` (rows with no pushable fields at all).
+
+Two deliberate 3a behaviors the steps below pin:
+- **rich_text is excluded from the diff** (the "3a skip", #55): a rich_text-*only* edit is a no-op, NOT a formatting-corrupting plain-text push. Un-skipped once #95's parser lands.
+- **The TOCTOU guard is timestamp-based, not a re-diff.** A changed row is re-fetched and its `notion-last-edited` compared; a moved timestamp → `Conflicts`, row skipped. (The DAG calls n32b "re-diff"; the code guards on the timestamp — `push.go:179`.) Reliably racing live Notion mid-run isn't scriptable, so the conflict path stays **unit-tested** — no live C-step depends on a race.
+
+**🚨 Page 4 rule still applies.** Every step below either pushes the full folder with Page 4 *unchanged* (3a skips it — safe) or, for C6, **excludes Page 4** (`--force` bypasses the diff and would re-send Page 4's rich_text as plain text, corrupting it). Never `--force` the full folder.
+
+### Step C0: Re-import for Phase 3
+
+Phase 2 leaves drift / a partial folder. Re-import a clean all-7 folder.
+
+Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./test-output/push-e2e`
+
+- **Pass:** all 7 `.md` present; `_database.json` + `AGENTS.md` present.
+
+### Step C1: Fresh import → every row is no-op (n31 equality traps, n32a)
+
+On the untouched import nothing differs from Notion, so the per-cell diff must find zero changes across all 11 property types.
+
+Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run`
+
+- **Pass:**
+  - Exit 0
+  - `Total: 7`, `Would push: 0`
+  - `Unchanged: 7 (already in sync — nothing to push)`
+  - No Notion write (dry-run). Proves the int/float, nil/empty, multi_select-reorder, and date-midnight equality traps all hold on live data — a clean round-trip produces no phantom diff.
+
+No revert (nothing written).
+
+### Step C2: One-cell edit → only that row writes; other pages' formatting survives (#55 core, n32a)
+
+The original epic symptom: editing one field must not clobber another page's rich text.
+
+1. **Snapshot Page 4** (`35957008-e885-8192-ab0f-c75e6a011b10`) via Notion MCP `notion-fetch`. Record its `Name` + `Description` rich-text payload (the annotation runs: bold / italic / link / inline-code / strikethrough / equation) and `Score` (400).
+2. Edit Page 5's local `.md` (`35957008-e885-815e-8e73-ea79c22f96d4.md`): `Score` `500` → `555`. Touch nothing else.
+3. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit 0
+  - `Pushed: 1`, `Unchanged: 6`
+  - **Notion MCP fetch Page 4:** `Name` + `Description` annotation payload byte-identical to the step-1 snapshot; `Score` still `400` (Page 4 unchanged → skipped → no `UpdatePage`).
+  - **Notion MCP fetch Page 5:** `Score` is `555`; `Related` still `[Page 4]`; all other props unchanged.
+
+**Revert:** restore Page 5's local `Score` → `500`, re-run the same `push --yes` (`Pushed: 1`, `Unchanged: 6`), then **fetch Page 5** to confirm `Score` is `500` again.
+
+### Step C3: rich_text-only edit is a no-op (the "3a skip", n31 rich_text exclusion)
+
+The most 3a-specific guard: a rich_text-only edit must NOT push (which would send it as plain text and corrupt formatting).
+
+1. On a clean folder (re-run C0 if needed), edit **only** Page 5's local `Description` (e.g. append ` EDITED`). Change no other field.
+2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Exit 0
+  - `Unchanged: 7`, `Pushed: 0` — Page 5's row is skipped because rich_text is excluded from the diff.
+  - **Notion MCP fetch Page 5:** `Description` is the **original** canonical value, NOT the ` EDITED` one (no push fired → no plain-text corruption).
+
+**Revert:** restore Page 5's local `Description` to canonical (or re-run C0). No Notion revert needed.
+
+### Step C4: multi_select reorder is a no-op (n31 set-equality)
+
+1. On a clean folder, reorder Page 5's local `Tags`: `[beta, gamma]` → `[gamma, beta]`. No value change.
+2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - `Unchanged: 7`, `Pushed: 0`.
+  - **Notion MCP fetch Page 5:** `Tags` still the set `{beta, gamma}`.
+
+**Revert:** restore local order or re-run C0. No Notion write.
+
+### Step C5: Null-edges row round-trips clean (Page 7, n31 nil/empty)
+
+Page 7 (`35957008-e885-814f-9f19-c401d454b08d`) has null `Score` / `Category` / `Due Date` / `Website` / `Email` / `Phone` and empty `Tags []`. Its fresh-import row must diff to no-op — nil/empty must not read as a phantom change.
+
+On the clean folder, run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - Page 7 is counted in `Unchanged`, never `Pushed` / `Failed`.
+  - **Notion MCP fetch Page 7:** all properties still null/empty — no spurious value or auto-created select option.
+
+(C1 already lands Page 7 in `Unchanged: 7`; this step is the explicit null-edge assertion + Notion check.)
+
+### Step C6: `--force` bypasses the diff (n32a negative)
+
+`--force` has no stash and must overwrite every row, even in-sync ones.
+
+⚠️ **Isolate to Page 5 — `--force` would clobber Page 4.**
+
+1. Re-run C0. Delete every `.md` except Page 5's (`35957008-e885-815e-8e73-ea79c22f96d4.md`). Keep `_database.json` + `AGENTS.md`. **Page 4 must be gone.**
+2. Verify: `push --dry-run` shows `Push queue (1 file)` = Page 5.
+3. Without editing anything, run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes --force`
+
+- **Pass:**
+  - Exit 0
+  - `Pushed: 1` (Page 5 re-sent despite being in sync); **no `Unchanged:` line** (force bypassed the diff → `skippedNoOp == 0`).
+  - **Notion MCP fetch Page 5:** values still canonical (force overwrote with identical values).
+
+**Revert:** re-run C0 (restores the full folder). Page 5's `last_edited_time` bumps — harmless, realigned on the next import.
+
+## Phase 3b / 3c — Per-field payload, store-verify, restamp (TODO — later PRs)
+
+Deferred nodes, NOT covered by 3a — don't assert these yet:
+- **n33** — send ONLY the changed fields (cell-scoped *write*). Until this lands, a changed row re-sends its whole payload, so "untouched fields don't bump beyond the changed cell" is not yet true.
+- **n34d / n34e** — verify pushed fields were stored as sent (LOUD on mismatch).
+- **n35a / n36a** — re-query authoritative `last_edited_time` and restamp local.
+- rich_text un-skip (#95 parser) — once wired, C3's no-op flips to a real formatted push; update C3 then.
 
 ## Phase 4 — Run summary JSON (TODO — added by phase 4 PR)
 
@@ -343,6 +453,8 @@ Notion MCP fetch of **every page touched by the run** — Pages 1–7 once any p
 | `Due Date` | `2026-06-01` (date-only) | `date.start` == canonical AND `is_datetime` == `0`/`false` |
 
 **Phase 2 additions — re-fetch Pages 2, 3, 6, 7 against `setup.md` canonicals.** V1/V2 stale-stamp Pages 2 & 3 (must end at `Score` 200 / 300). V3 marks Page 6 deleted in the local file only (Notion-side `Score` 600 must be untouched). V4 corrupts Page 7's local YAML (Notion-side unchanged). V5 actually writes to Notion — its mandatory revert step must restore Page 2 → 200 and Page 3 → 300 before F1 runs. Don't duplicate the canonical values here — read them from `setup.md`'s per-page sections (Pages 2/3/6/7).
+
+**Phase 3a additions — re-fetch Pages 4, 5, 7 against `setup.md` canonicals.** C2 writes then reverts Page 5 (`Score` must end at 500; `Related` = [Page 4]). **Page 4 is the load-bearing check:** C2/C6 are designed never to write it, so any drift in its `Name` / `Description` annotation payload means the cell-diff skip (C2) or the `--force` isolation (C6) failed — fail the run loudly. Page 7 must remain all-null. C3 edits Page 5's `Description` locally only (no Notion write) — confirm Notion-side `Description` is canonical.
 
 If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
 
@@ -381,6 +493,13 @@ Print a summary table:
 | V3   | Soft-deleted skip (n21b)                | PASS   |
 | V4   | Malformed YAML halts (n21g)             | PASS   |
 | V5   | --force bypasses every halt class       | PASS   |
+| C0   | Re-import for Phase 3                    | PASS   |
+| C1   | Fresh import → every row no-op          | PASS   |
+| C2   | One-cell edit, formatting survives      | PASS   |
+| C3   | rich_text-only edit = no-op             | PASS   |
+| C4   | multi_select reorder = no-op            | PASS   |
+| C5   | Null-edges row round-trips clean        | PASS   |
+| C6   | --force bypasses the diff               | PASS   |
 | F1   | Final state matches canonical (1–7)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```
