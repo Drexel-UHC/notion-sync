@@ -408,7 +408,7 @@ On the clean folder, run: `./notion-sync.exe push "./test-output/push-e2e/notion
 ⚠️ **Isolate to Page 5 — `--force` would clobber Page 4.**
 
 1. Re-run C0. Delete every `.md` except Page 5's (`35957008-e885-815e-8e73-ea79c22f96d4.md`). Keep `_database.json` + `AGENTS.md`. **Page 4 must be gone.**
-2. Verify: `push --dry-run` shows `Push queue (1 file)` = Page 5.
+2. Verify isolation: `push --dry-run` reports `Total: 1` (just Page 5). Note `--dry-run` short-circuits *before* the gate preview, so it prints `Total:`, **not** the `Push queue (1 file)` line — that line only appears in the gated, non-`--yes` path (see G4).
 3. Without editing anything, run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes --force`
 
 - **Pass:**
