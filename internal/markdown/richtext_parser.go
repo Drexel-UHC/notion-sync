@@ -37,12 +37,24 @@ import (
 //	"100% == done"  → " done" gets a phantom yellow_background highlight
 //	"a*b*c*d"       → alternating italic runs; all three "*" deleted
 //
-// Multiplication, globs, footnote asterisks, and "100% ==" are real database cell
-// values, so this MUST be fixed (track open delimiter positions; treat a marker
-// left unclosed at EOF as literal text) BEFORE this parser is wired into push,
-// or it reintroduces the cell corruption #95 set out to fix. It is unwired today
-// — ParseRichText has zero production callers (wiring is deferred to epic #55) —
-// so the corruption is latent, not live.
+// Links share the defect through a different mechanism: tryLink matches the
+// FIRST ")" (and the first "]"), so a URL or bracketed text that itself contains
+// those characters is silently mis-parsed, e.g.
+//
+//	"[x](https://en.wikipedia.org/wiki/Foo_(bar))"
+//	    → URL truncated to ".../Foo_(bar" plus a phantom ")" text segment
+//
+// Here the Markdown STRING still round-trips (so a fixed-point test stays blind),
+// but the rich-text STRUCTURE sent to Notion is wrong — wrong URL, extra run.
+//
+// Multiplication, globs, footnote asterisks, "100% ==", and parenthesized URLs
+// (Wikipedia and friends) are real database cell values, so this MUST be fixed —
+// balance the markers (track open delimiter positions; treat a marker left
+// unclosed at EOF as literal text) and match link delimiters with nesting/escape
+// awareness — BEFORE this parser is wired into push, or it reintroduces the cell
+// corruption #95 set out to fix. It is unwired today — ParseRichText has zero
+// production callers (wiring is deferred to epic #55) — so the corruption is
+// latent, not live.
 //
 // Pure function — no push wiring lives here.
 func ParseRichText(md string) []notion.RichText {
