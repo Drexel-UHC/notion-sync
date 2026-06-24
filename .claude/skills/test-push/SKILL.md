@@ -446,21 +446,22 @@ The in-scope version of the #55 epic symptom: editing one *scalar* field on a pa
 
 **Revert:** restore Page 4's local `Score` → `400`, re-run the same `push --yes` (`Pushed: 1`, `Unchanged: 6`), then **fetch Page 4** to confirm `Score` is `400` again and `Description` is still byte-identical to the snapshot.
 
-### Step C8: Precise restamp → immediate re-push is a clean no-op (n34d happy path + n35a/n36a)
+### Step C8: Restamp keeps local aligned → a changed-row re-push doesn't spuriously conflict (n34d happy path + n35a/n36a)
 
-Proves the read-back verify passed *and* the restamp wrote Notion's authoritative timestamp — observable because a wrong/quantized stamp resurfaces as a phantom conflict on the very next push.
+Proves the read-back verify passed *and* the restamp wrote back Notion's authoritative `last_edited_time` — observable because a stale/wrong stamp would fail the *next* changed row's TOCTOU compare and surface as a phantom conflict.
+
+> **Granularity note (verified live 2026-06-24).** The push-e2e DB's Notion API floors `last_edited_time` to the whole minute — even the GetPage refetch returns `…:00.000Z` (a write at `:33` reads back `2026-06-24T18:33:00.000Z`). So **do not assert sub-minute precision** — "to the second" is unobservable here. The observable n35a/n36a signal is that the restamp keeps local in lockstep with whatever Notion returns, so the *next* changed-row push doesn't conflict. (A no-op re-push does **not** test this — a no-op short-circuits on the per-cell diff before the TOCTOU compare, so the re-edit in step 2 is required.)
 
 1. Re-run C0 if needed. Edit Page 5's local `.md` (`35957008-e885-815e-8e73-ea79c22f96d4.md`): `Score` `500` → `567`. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`.
 
 - **Pass (first push):**
   - Exit 0, `Pushed: 1`, `Unchanged: 6`
-  - Page 5's local `.md` now has `notion-last-pushed:` set and `notion-last-edited:` updated.
-  - **Notion MCP fetch Page 5:** `Score` is `567`; record its `last_edited_time`. Assert the local `notion-last-edited` equals Notion's `last_edited_time` **to the second** (precise, not floored to the whole minute — the n35a/n36a guard against issue #57's quantized echo).
+  - Page 5's local `.md` now has `notion-last-pushed:` set and `notion-last-edited:` rewritten (to Notion's minute-floored value — expected; see the granularity note).
 
-2. **Without editing anything**, run the same `push --yes` **again**.
+2. **Edit Page 5's `Score` again** `567` → `568` and run the same `push --yes`. A changed row re-fetches and runs the TOCTOU timestamp compare — this is the real restamp catch.
 
 - **Pass (second push):**
-  - Exit 0, `Unchanged: 7`, `Pushed: 0`, **no `Conflicts:` line**. A quantized or wrong restamp from step 1 would fail the TOCTOU timestamp compare here and show a phantom `Conflicts: 1` — a clean no-op is the proof the restamp stored the authoritative value.
+  - Exit 0, `Pushed: 1`, **no `Conflicts:` line**. A stale or wrong restamp from step 1 would fail the TOCTOU compare here and show a phantom `Conflicts: 1` — a clean push is the proof the restamp stored the value Notion reports on the next read.
 
 **Revert:** restore Page 5's local `Score` → `500`, re-run `push --yes` (`Pushed: 1`), then **fetch Page 5** to confirm `Score` is `500` again.
 
@@ -563,7 +564,7 @@ Print a summary table:
 | C5   | Null-edges row round-trips clean        | PASS   |
 | C6   | --force bypasses the diff               | PASS   |
 | C7   | Scalar edit on Page 4 keeps rich text   | PASS   |
-| C8   | Precise restamp → re-push is no-op       | PASS   |
+| C8   | Restamp aligns local; re-push no conflict | PASS  |
 | C9   | Auth 403 halts once, writes nothing     | SKIP   |
 | F1   | Final state matches canonical (1–7)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
