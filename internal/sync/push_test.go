@@ -524,6 +524,341 @@ func TestPushDatabase_n32a_UnchangedRowSkippedNoOp_NoUpdatePageCall(t *testing.T
 	}
 }
 
+// n33: the push must send ONLY the fields the diff flagged as changed, not the
+// whole pushable set. Here Status matches the snapshot and only Priority moved —
+// the UpdatePage payload must carry Priority alone. Sending the untouched Status
+// is wasteful and, for a mixed rich_text+scalar edit, would re-send (and corrupt)
+// the rich_text the diff deliberately skipped.
+func TestPushDatabase_n33_SendsOnlyChangedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" + // unchanged vs snapshot
+		"Priority: 5\n" + // changed (snapshot has 2)
+		"---\n# Content\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID: "db-001",
+		Properties: map[string]notion.DatabaseProperty{
+			"Status":   {Type: "select"},
+			"Priority": {Type: "number"},
+		},
+	}
+	prio := 2.0
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status":   {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+			"Priority": {Type: "number", Number: &prio},
+		},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 pushed, got %d (errors=%v)", result.Pushed, result.Errors)
+	}
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected 1 UpdatePage call, got %d", len(client.updateRequests))
+	}
+	sent := client.updateRequests[0].Properties
+	if _, ok := sent["Priority"]; !ok {
+		t.Errorf("expected changed field Priority in payload, got %v", sent)
+	}
+	if _, ok := sent["Status"]; ok {
+		t.Errorf("unchanged field Status must NOT be sent, got %v", sent)
+	}
+}
+
+// n34d/n34e: after the write, push re-reads the row and verifies each changed
+// field actually stored the value we sent. If Notion stored something else, that
+// is a LOUD per-row failure — the row counts as Failed (not Pushed), the error
+// names the field, and crucially the local file is NOT restamped (no
+// notion-last-pushed), so the next run re-attempts instead of trusting a write
+// that didn't take.
+func TestPushDatabase_n34e_StoredMismatchFailsLoudNoRestamp(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"---\n# Content\n"
+	filePath := filepath.Join(dir, "page-001.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// Snapshot: Status is "To Do" locally edited to "Done" → changed field.
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}},
+		},
+	}
+	// Notion stores a DIFFERENT value than we sent (verbatim override) — the
+	// read-back must catch this as a mismatch.
+	client.postUpdatePages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-06-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "Corrupted"}},
+		},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("verify mismatch is a per-row failure, not a run error: %v", err)
+	}
+	if result.Pushed != 0 {
+		t.Errorf("expected 0 pushed on verify mismatch, got %d", result.Pushed)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("expected 1 failed on verify mismatch, got %d (errors=%v)", result.Failed, result.Errors)
+	}
+	var named bool
+	for _, e := range result.Errors {
+		// Names the field, flags the store mismatch, and shows sent vs stored
+		// (DAG n34e: "field name + sent vs stored").
+		if strings.Contains(e, "Status") && strings.Contains(strings.ToLower(e), "stored") &&
+			strings.Contains(e, "Done") && strings.Contains(e, "Corrupted") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("expected an error naming 'Status' with sent 'Done' vs stored 'Corrupted', got %v", result.Errors)
+	}
+	// No restamp: the write didn't verify, so the file must not be marked pushed.
+	got, _ := os.ReadFile(filePath)
+	if strings.Contains(string(got), "notion-last-pushed") {
+		t.Error("a verify mismatch must NOT restamp the file (no notion-last-pushed)")
+	}
+}
+
+// n34d happy path: when Notion stores exactly what we sent, verify passes and the
+// row restamps normally. Pairs with the mismatch test to pin both branches.
+func TestPushDatabase_n34d_CorrectStoreVerifiesAndRestamps(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\n" +
+		"notion-id: page-001\n" +
+		"notion-last-edited: 2024-01-01T00:00:00Z\n" +
+		"notion-database-id: db-001\n" +
+		"Status: Done\n" +
+		"---\n# Content\n"
+	filePath := filepath.Join(dir, "page-001.md")
+	if err := os.WriteFile(filePath, []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// Snapshot has the pre-edit value; the mock applies the sent value on a
+	// successful UpdatePage, so the read-back sees "Done" and verify passes.
+	client.pages["page-001"] = &notion.Page{
+		ID:             "page-001",
+		LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}},
+		},
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Pushed != 1 {
+		t.Fatalf("expected 1 pushed when store verifies, got %d (errors=%v)", result.Pushed, result.Errors)
+	}
+	if result.Failed != 0 {
+		t.Errorf("expected 0 failed, got %d (%v)", result.Failed, result.Errors)
+	}
+	got, _ := os.ReadFile(filePath)
+	if !strings.Contains(string(got), "notion-last-pushed") {
+		t.Error("a verified push must restamp the file")
+	}
+}
+
+// n34c: a per-row 4xx (400/422 schema error, or a transient exhausted after the
+// HTTP client's own retries) is a LOUD per-row failure that does NOT abort the
+// run. The bad row counts as Failed with an error naming it; sibling rows still
+// push. This is the continue-class outcome, distinct from the auth halt (n34h).
+func TestPushDatabase_n34c_PerRow400FailsAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"good.md": "---\nnotion-id: page-good\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"bad.md":  "---\nnotion-id: page-bad\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Blocked\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	// Both rows changed vs their snapshot (snapshot Status differs from local).
+	client.pages["page-good"] = &notion.Page{
+		ID: "page-good", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	client.pages["page-bad"] = &notion.Page{
+		ID: "page-bad", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	// page-bad's write returns a terminal 400 (schema validation).
+	client.updateErrors["page-bad"] = &notion.ErrorResponse{
+		Status: 400, Code: "validation_error", Message: "body failed validation",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("a per-row 4xx must not be a run-level error: %v", err)
+	}
+	if result.AuthHalted {
+		t.Error("a 400 is per-row, not an auth halt")
+	}
+	if result.Pushed != 1 {
+		t.Errorf("expected the good row to still push (Pushed=1), got %d", result.Pushed)
+	}
+	if result.Failed != 1 {
+		t.Errorf("expected the bad row to fail (Failed=1), got %d", result.Failed)
+	}
+	// Both rows were attempted — the bad one didn't short-circuit the queue.
+	if len(client.updateRequests) != 2 {
+		t.Errorf("expected both rows attempted (2 UpdatePage calls), got %d", len(client.updateRequests))
+	}
+	var named bool
+	for _, e := range result.Errors {
+		if strings.Contains(e, "bad.md") && strings.Contains(e, "validation") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("expected an error naming bad.md and Notion's message, got %v", result.Errors)
+	}
+}
+
+// n34h: a 401 on a write is run-wide (the credential, not the row). The run must
+// halt immediately — remaining rows skip the API call entirely. Files are named
+// so os.ReadDir's sorted order puts the auth-failing row first; the good sibling
+// after it must never be attempted.
+func TestPushDatabase_n34h_AuthErrorHaltsRun(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	files := map[string]string{
+		"a-auth.md": "---\nnotion-id: page-auth\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+		"z-good.md": "---\nnotion-id: page-good\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-auth"] = &notion.Page{
+		ID: "page-auth", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	client.pages["page-good"] = &notion.Page{
+		ID: "page-good", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	client.updateErrors["page-auth"] = &notion.ErrorResponse{
+		Status: 401, Code: "unauthorized", Message: "API token is invalid",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("auth halt is surfaced via result.AuthHalted, not err: %v", err)
+	}
+	if !result.AuthHalted {
+		t.Fatal("expected result.AuthHalted=true on a 401 write")
+	}
+	if result.AuthError == "" {
+		t.Error("expected AuthError to carry the reason + fix")
+	}
+	if result.Pushed != 0 {
+		t.Errorf("expected 0 pushed (auth failed on the first row), got %d", result.Pushed)
+	}
+	// Only the auth row was attempted — the sorted-first one. The sibling skips.
+	if len(client.updateRequests) != 1 {
+		t.Fatalf("expected exactly 1 UpdatePage call before the halt, got %d", len(client.updateRequests))
+	}
+	if client.updateRequests[0].PageID != "page-auth" {
+		t.Errorf("expected the auth row attempted first, got %s", client.updateRequests[0].PageID)
+	}
+}
+
+// n34h: 403 (no write access) halts the run the same way 401 does.
+func TestPushDatabase_n34h_ForbiddenAlsoHaltsRun(t *testing.T) {
+	dir := t.TempDir()
+	writeDatabaseMeta(t, dir, "db-001")
+
+	md := "---\nnotion-id: page-001\nnotion-last-edited: 2024-01-01T00:00:00Z\nStatus: Done\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "page-001.md"), []byte(md), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newMockClient()
+	client.databases["db-001"] = &notion.Database{
+		ID:         "db-001",
+		Properties: map[string]notion.DatabaseProperty{"Status": {Type: "select"}},
+	}
+	client.pages["page-001"] = &notion.Page{
+		ID: "page-001", LastEditedTime: "2024-01-01T00:00:00Z",
+		Properties: map[string]notion.Property{"Status": {Type: "select", Select: &notion.SelectValue{Name: "To Do"}}},
+	}
+	client.updateErrors["page-001"] = &notion.ErrorResponse{
+		Status: 403, Code: "restricted_resource", Message: "insufficient permissions",
+	}
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.AuthHalted {
+		t.Fatal("expected result.AuthHalted=true on a 403 write")
+	}
+	if result.Failed != 0 {
+		t.Errorf("a 403 is an auth halt, not a per-row failure; Failed should be 0, got %d", result.Failed)
+	}
+}
+
 // --- PushDatabase integration tests ---
 
 func TestPushDatabase_PushesProperties(t *testing.T) {
@@ -975,12 +1310,16 @@ func TestPushDatabase_WritesPreciseLastEditedAfterUpdate(t *testing.T) {
 		ID:             "page-001",
 		LastEditedTime: "2026-04-30T22:43:00.000Z",
 	}
-	// After UpdatePage, Notion's stored state has the precise timestamp,
-	// which is what subsequent GetPage / QueryDataSource calls would see.
+	// After UpdatePage, Notion's stored state has the precise timestamp and the
+	// value we sent (Status: Done) — what subsequent GetPage / QueryDataSource
+	// calls would see, and what the read-back verify (n34d) checks against.
 	preciseTime := "2026-04-30T22:43:25.123Z"
 	client.postUpdatePages["page-001"] = &notion.Page{
 		ID:             "page-001",
 		LastEditedTime: preciseTime,
+		Properties: map[string]notion.Property{
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+		},
 	}
 
 	if _, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil); err != nil {

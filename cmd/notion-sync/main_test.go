@@ -396,6 +396,33 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 	}
 }
 
+// renderAuthHaltedResult formats the summary the CLI prints when a write returns
+// 401/403 mid-run (DAG n34h). Unlike the validation halt, rows can have pushed
+// before the credential failed — the output must own up to that partial progress
+// AND surface the one-line reason+fix. Pins the header, the partial-progress
+// line, and that the auth reason is shown.
+func TestRenderAuthHaltedResult_ShowsErrorAndPartialProgress(t *testing.T) {
+	result := &sync.PushResult{
+		Title:      "Test DB",
+		Pushed:     2,
+		AuthHalted: true,
+		AuthError:  "authentication failed (API token is invalid) — check the API key has write access to this database, then re-run",
+	}
+	var buf bytes.Buffer
+	renderAuthHaltedResult(result, &buf)
+	out := buf.String()
+
+	if !strings.Contains(out, `Auth halted: "Test DB"`) {
+		t.Errorf("expected quoted title in 'Auth halted:' header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Pushed before halt: 2") {
+		t.Errorf("expected partial-progress line showing 2 pushed, got:\n%s", out)
+	}
+	if !strings.Contains(out, "authentication failed") {
+		t.Errorf("expected the auth error reason+fix in the output, got:\n%s", out)
+	}
+}
+
 // --dry-run skips the gate entirely (no writes, no consent needed). The
 // gate's preview header ("Push queue (") must not appear, and the dry-run
 // banner must.

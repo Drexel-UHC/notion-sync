@@ -159,7 +159,12 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 		// (n32a), and we skip the TOCTOU re-fetch entirely — only rows that
 		// actually change pay for the second GetPage (decision #2). --force has no
 		// stash and deliberately overwrites, so it bypasses the diff.
+		//
+		// changedFields stays nil under --force, which means "send every pushable
+		// field" — the deliberate overwrite-blind path. On the gate path it's the
+		// re-diff against the fresh re-fetch, so the push sends ONLY what changed.
 		var notionPage *notion.Page
+		var changedFields []string
 		if !opts.Force {
 			if len(diffRow(f.fm, f.page, schema)) == 0 {
 				result.SkippedNoOp++
@@ -182,9 +187,20 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 				continue
 			}
 			notionPage = page
+
+			// Re-diff against the fresh re-fetch (decision #2): this is the
+			// authoritative changed-field set the push sends (n33). A row that
+			// raced into equality between the gate read and now is a no-op.
+			changedFields = diffRow(f.fm, page, schema)
+			if len(changedFields) == 0 {
+				result.SkippedNoOp++
+				continue
+			}
 		}
 
-		properties, validationErrs := buildPropertyPayload(f.fm, schema)
+		// n33: send ONLY the changed fields. Under --force changedFields is nil,
+		// which buildPropertyPayloadFor treats as "all pushable fields".
+		properties, validationErrs := buildPropertyPayloadFor(f.fm, schema, changedFields)
 		if len(validationErrs) > 0 {
 			result.Failed++
 			for _, e := range validationErrs {
@@ -192,6 +208,9 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 			}
 			continue
 		}
+		// With the payload narrowed to changedFields, an empty payload means the
+		// only changed field can't be expressed as a write (e.g. a buildPropertyValue
+		// that returns nil) — count it Skipped rather than push an empty PATCH.
 		if len(properties) == 0 {
 			result.Skipped++
 			continue
@@ -204,17 +223,48 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 
 		updated, err := opts.Client.UpdatePage(notionID, properties)
 		if err != nil {
+			// n34h: 401/403 is run-wide — the credential, not the row, failed.
+			// Halt now so the remaining rows skip the API entirely (one clean
+			// error instead of N identical ones). Rows already pushed stay pushed.
+			if notion.IsAuthError(err) {
+				result.AuthHalted = true
+				result.AuthError = fmt.Sprintf("authentication failed (%v) — check the API key has write access to this database, then re-run", err)
+				break
+			}
+			// n34c: per-row 4xx / exhausted-transient — loud-fail, keep going.
 			result.Failed++
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", filepath.Base(f.Path), err))
 			continue
 		}
 
-		// UpdatePage's response echoes last_edited_time quantized to whole
-		// minutes, but Notion's stored value (returned by GetPage / QueryDataSource)
-		// is precise. Re-fetch so the local frontmatter holds the precise value
-		// and the next refresh doesn't see the page as stale. See issue #57.
-		newLastEdited := ""
+		// Read-back (DAG n34d + n35a): re-fetch the row once. The same fetch does
+		// two jobs — verify the write stored what we sent, and read Notion's
+		// precise last_edited_time. UpdatePage's response echoes last_edited_time
+		// quantized to whole minutes, but the stored value is precise (issue #57).
 		refetched, refetchErr := opts.Client.GetPage(notionID)
+
+		// n34d/n34e: verify each changed field round-tripped. A mismatch is a LOUD
+		// per-row failure — the row is NOT restamped, so the next run re-attempts
+		// rather than trusting a write that didn't take. Skipped under --force (no
+		// changedFields; deliberate blind overwrite) and when the refetch failed
+		// (can't verify — surfaced as the non-fatal timestamp warning below).
+		//
+		// Assumes Notion is read-after-write consistent for our token (it is): a
+		// stale read here would spuriously fail the row, but the write is
+		// idempotent so the next run re-pushes and re-verifies cleanly.
+		if !opts.Force && refetchErr == nil && refetched != nil {
+			if mismatches := verifyStoredFields(f.fm, refetched, schema, changedFields); len(mismatches) > 0 {
+				result.Failed++
+				parts := make([]string, 0, len(mismatches))
+				for _, m := range mismatches {
+					parts = append(parts, fmt.Sprintf("%s (sent %q, stored %q)", m.Field, m.Sent, m.Stored))
+				}
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: Notion stored %s differently than sent — not restamped; re-check and re-push", filepath.Base(f.Path), strings.Join(parts, ", ")))
+				continue
+			}
+		}
+
+		newLastEdited := ""
 		if refetchErr == nil && refetched != nil {
 			newLastEdited = refetched.LastEditedTime
 		} else {
@@ -280,6 +330,49 @@ func diffRow(fm map[string]interface{}, snapshot *notion.Page, schema map[string
 	}
 	sort.Strings(changed)
 	return changed
+}
+
+// fieldMismatch is one read-back discrepancy: a changed field whose stored value
+// differs from what the push sent (DAG n34e). Sent/Stored carry the human-readable
+// values so the failure line can show both, not just the field name.
+type fieldMismatch struct {
+	Field  string
+	Sent   string
+	Stored string
+}
+
+// verifyStoredFields re-decodes the row Notion stored after a push and returns a
+// mismatch for each changed field whose stored value does not match what we sent
+// (DAG n34d). A non-empty result is a read-back mismatch (n34e). It compares only
+// the fields the push actually sent (changedFields) and, like diffRow, skips
+// rich_text — rich_text is never sent (the 3a skip), so it can be neither
+// verified nor blamed. mapPropertiesToFrontmatter + valuesEqual decode and
+// compare both sides in the same representation the diff used, so verify can't
+// disagree with diff.
+func verifyStoredFields(fm map[string]interface{}, stored *notion.Page, schema map[string]notion.DatabaseProperty, changedFields []string) []fieldMismatch {
+	remote := map[string]interface{}{}
+	if stored != nil {
+		mapPropertiesToFrontmatter(stored.Properties, remote, false)
+	}
+	var mismatches []fieldMismatch
+	for _, key := range changedFields {
+		prop, ok := pushableField(key, schema)
+		if !ok {
+			continue
+		}
+		if prop.Type == "rich_text" {
+			continue
+		}
+		if !valuesEqual(prop.Type, fm[key], remote[key]) {
+			mismatches = append(mismatches, fieldMismatch{
+				Field:  key,
+				Sent:   fmt.Sprintf("%v", fm[key]),
+				Stored: fmt.Sprintf("%v", remote[key]),
+			})
+		}
+	}
+	sort.Slice(mismatches, func(i, j int) bool { return mismatches[i].Field < mismatches[j].Field })
+	return mismatches
 }
 
 // pushableField reports whether a frontmatter key maps to a schema property the
@@ -397,9 +490,29 @@ var pushSkipTypes = map[string]bool{
 }
 
 func buildPropertyPayload(fm map[string]interface{}, schema map[string]notion.DatabaseProperty) (map[string]interface{}, []string) {
+	return buildPropertyPayloadFor(fm, schema, nil)
+}
+
+// buildPropertyPayloadFor is buildPropertyPayload restricted to a set of keys.
+// A nil `only` means "every pushable field" (the --force overwrite-blind path);
+// a non-nil `only` restricts the payload to exactly those keys — the changed-
+// field set from the diff (DAG n33). Restricting to changed fields also means a
+// rich_text field that the diff skips never reaches the payload on a mixed edit,
+// so a scalar change can't drag a formatting-corrupting rich_text push along.
+func buildPropertyPayloadFor(fm map[string]interface{}, schema map[string]notion.DatabaseProperty, only []string) (map[string]interface{}, []string) {
+	var onlySet map[string]bool
+	if only != nil {
+		onlySet = make(map[string]bool, len(only))
+		for _, k := range only {
+			onlySet[k] = true
+		}
+	}
 	result := make(map[string]interface{})
 	var errs []string
 	for key, val := range fm {
+		if onlySet != nil && !onlySet[key] {
+			continue
+		}
 		prop, ok := pushableField(key, schema)
 		if !ok {
 			continue

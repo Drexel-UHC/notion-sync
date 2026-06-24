@@ -107,4 +107,11 @@ type PushResult struct {
 	// the validation pass so the caller can surface them all at once.
 	Halted bool
 	Halts  []FileClassification
+
+	// AuthHalted is true iff a push write returned a run-wide auth failure
+	// (401/403, DAG n34h). Unlike a validation halt this fires mid-run, so rows
+	// pushed before it are real and already counted in Pushed. AuthError carries
+	// the one-line reason+fix surfaced once, instead of once per remaining row.
+	AuthHalted bool
+	AuthError  string
 }
