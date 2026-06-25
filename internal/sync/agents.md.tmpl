@@ -195,7 +195,7 @@ These disable safety. Use them **only** when a human explicitly instructs you to
 
 ### Routine flags
 
-- `--dry-run` — classify and diff with **no** Notion API calls; the safe way to preview a push. Always prefer this first.
+- `--dry-run` — classify and diff with **no writes/mutations**; the safe way to preview a push. It still **reads** Notion (fetches the schema and each row) to classify and diff — it suppresses only the writes. Always prefer this first.
 - `--yes` / `-y` — the consent token for the confirmation gate (above). Required non-interactively; pass only with human approval.
 
 ### What gets written
@@ -222,9 +222,9 @@ Every terminal path (success, halt, cancel) prints **one JSON object first on st
 ```
 
 - `status` is one of: `clean` (every row pushed or already in sync), `partial` (run finished but some rows failed), `halted` (a gate stopped the run — nothing, or only pre-halt rows, pushed), `cancelled` (consent declined).
-- All six arrays are always present (`[]` when empty) — index without a presence check.
+- The five arrays (`pushed`, `skippedNoOp`, `skippedNonRow`, `failed`, `halted`) are always present (`[]` when empty) — index without a presence check. `status` is always a string.
 - On a `conflict` halt the entry's `cells[]` lists each differing field with both the local and Notion value, so you can reconcile without re-fetching. `phase` is `validation` (pre-write gate) or `auth` (a 401/403 mid-run).
-- **Exit code:** `0` for `clean` / `cancelled` / dry-run; **non-zero** for `partial` / `halted`. Prefer `status` over the exit code when branching.
+- **Exit code:** `0` for `clean` / `cancelled`; **non-zero** for `partial` / `halted`. A dry-run is **not** unconditionally `0` — it still runs the validation gate, so a gate failure yields `halted` and a non-zero exit. Prefer `status` over the exit code when branching.
 - **On any `halted`, `partial`, or `cancelled` outcome, report the entry's `reason` and `fix` to the human and stop** — do not auto-retry with `--force` / `--allow-new-options`. Whether to override a guardrail is the human's decision, not yours.
 
 ### Rich-text fidelity on push
