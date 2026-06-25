@@ -82,6 +82,7 @@ jobs:
         with:
           files: release/*
           generate_release_notes: true
+          discussion_category_name: Announcements
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
