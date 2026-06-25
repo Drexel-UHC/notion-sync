@@ -180,6 +180,81 @@ func TestEnsureAgentsMDCurrent_NoVersion(t *testing.T) {
 	}
 }
 
+// syncAgentsMD is the import/refresh auto-path. A *missing* AGENTS.md is always
+// created — even in a dev build (Version unset) — so a first import emits the doc.
+func TestSyncAgentsMD_WritesIfMissingEvenWithoutVersion(t *testing.T) {
+	tmp := t.TempDir()
+
+	prev := Version
+	Version = ""
+	defer func() { Version = prev }()
+
+	if err := syncAgentsMD(tmp); err != nil {
+		t.Fatalf("syncAgentsMD: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "AGENTS.md")); err != nil {
+		t.Errorf("AGENTS.md was not created on first import: %v", err)
+	}
+}
+
+// syncAgentsMD force-upgrades an existing, stale-stamped AGENTS.md (tool-owned
+// file — local edits are intentionally discarded on version drift).
+func TestSyncAgentsMD_ForceUpgradesStale(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "AGENTS.md")
+
+	prev := Version
+	Version = "v2.0.0"
+	defer func() { Version = prev }()
+
+	stale := "<!-- notion-sync-version: v1.0.0 -->\n# stale + hand-edited\n"
+	if err := os.WriteFile(dest, []byte(stale), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := syncAgentsMD(tmp); err != nil {
+		t.Fatalf("syncAgentsMD: %v", err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(got), "<!-- notion-sync-version: v2.0.0 -->") {
+		t.Errorf("stale AGENTS.md was not force-upgraded:\n%s", got)
+	}
+	if strings.Contains(string(got), "stale + hand-edited") {
+		t.Errorf("force-upgrade kept stale content:\n%s", got)
+	}
+}
+
+// syncAgentsMD leaves a current-stamped file alone (no needless rewrite).
+func TestSyncAgentsMD_LeavesCurrentAlone(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "AGENTS.md")
+
+	prev := Version
+	Version = "v3.0.0"
+	defer func() { Version = prev }()
+
+	current := "<!-- notion-sync-version: v3.0.0 -->\n# whatever\n"
+	if err := os.WriteFile(dest, []byte(current), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := syncAgentsMD(tmp); err != nil {
+		t.Fatalf("syncAgentsMD: %v", err)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != current {
+		t.Errorf("current AGENTS.md was needlessly rewritten")
+	}
+}
+
 func TestEnsureAgentsMDCurrent_WritesIfMissing(t *testing.T) {
 	tmp := t.TempDir()
 
@@ -251,43 +326,23 @@ func TestParseAgentsMDVersion_EmptyValue(t *testing.T) {
 	}
 }
 
-func TestWriteAgentsMD_PreservesExisting(t *testing.T) {
-	tmp := t.TempDir()
-	dest := filepath.Join(tmp, "AGENTS.md")
-	custom := "# my hand-edited AGENTS.md\n"
-	if err := os.WriteFile(dest, []byte(custom), 0644); err != nil {
-		t.Fatalf("seed: %v", err)
+// TestEmbeddedTemplateHasPlaceholder guards the embed refactor: the embedded
+// agents.md.tmpl must still carry the {{VERSION}} placeholder, and renderAgentsMD
+// must substitute it (not leave the literal placeholder behind).
+func TestEmbeddedTemplateHasPlaceholder(t *testing.T) {
+	if !strings.Contains(agentsMDTemplate, "{{VERSION}}") {
+		t.Fatalf("embedded template lost the {{VERSION}} placeholder")
 	}
-
-	if err := WriteAgentsMD(tmp); err != nil {
-		t.Fatalf("WriteAgentsMD: %v", err)
-	}
-
-	got, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != custom {
-		t.Errorf("WriteAgentsMD overwrote existing file:\nwant: %q\ngot:  %q", custom, got)
-	}
-}
-
-func TestWriteAgentsMD_StampsVersion(t *testing.T) {
-	tmp := t.TempDir()
 
 	prev := Version
-	Version = "vTEST"
+	Version = "vEMBED"
 	defer func() { Version = prev }()
 
-	if err := WriteAgentsMD(tmp); err != nil {
-		t.Fatalf("WriteAgentsMD: %v", err)
+	got := renderAgentsMD()
+	if strings.Contains(got, "{{VERSION}}") {
+		t.Errorf("renderAgentsMD left the {{VERSION}} placeholder unsubstituted")
 	}
-
-	got, err := os.ReadFile(filepath.Join(tmp, "AGENTS.md"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if !strings.Contains(string(got), "<!-- notion-sync-version: vTEST -->") {
-		t.Errorf("AGENTS.md missing version stamp, got:\n%s", got)
+	if !strings.Contains(got, "<!-- notion-sync-version: vEMBED -->") {
+		t.Errorf("renderAgentsMD did not stamp the version, got head:\n%.80s", got)
 	}
 }

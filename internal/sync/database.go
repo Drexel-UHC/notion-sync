@@ -149,8 +149,9 @@ func FreshDatabaseImport(opts DatabaseImportOptions, onProgress ProgressCallback
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
-	// Write AGENTS.md at workspace root (only on first import, won't overwrite)
-	if err := WriteAgentsMD(opts.OutputFolder); err != nil {
+	// Write AGENTS.md at workspace root (creates if missing, force-upgrades on
+	// version drift — it is a generated, tool-owned file).
+	if err := syncAgentsMD(opts.OutputFolder); err != nil {
 		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 

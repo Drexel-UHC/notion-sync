@@ -46,8 +46,9 @@ func RefreshDatabase(opts RefreshOptions, onProgress ProgressCallback) (*Databas
 
 	workspacePath := filepath.Dir(opts.FolderPath)
 
-	// Ensure AGENTS.md exists at workspace root (backfill for older imports)
-	if err := WriteAgentsMD(workspacePath); err != nil {
+	// Ensure AGENTS.md at workspace root: backfill for older imports, and
+	// force-upgrade it when this binary is newer than the stamped version.
+	if err := syncAgentsMD(workspacePath); err != nil {
 		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
