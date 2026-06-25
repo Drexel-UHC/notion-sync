@@ -212,9 +212,11 @@ Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./t
 
 - **Pass:** all 8 `.md` files present in `./test-output/push-e2e/notion-sync-test-database-push/`. `_database.json` and `AGENTS.md` also present.
 
-### Step V1: Single conflict halts the run (n21d)
+### Step V1: Single conflict halts the run + per-cell report (n21d, #103)
 
-Edit Page 2's local `.md` (`35957008-e885-811d-ae4b-eb73607cc037.md`): change `notion-last-edited` to `2020-01-01T00:00:00Z` (definitively stale). Don't touch any property values.
+Edit Page 2's local `.md` (`35957008-e885-811d-ae4b-eb73607cc037.md`): make **two** changes —
+1. change `notion-last-edited` to `2020-01-01T00:00:00Z` (definitively stale → forces the conflict class), and
+2. change a property value so the conflict carries a real cell diff: set `Score` to `999` (canonical Notion value is **200**).
 
 Isolate to Page 2: delete every other page's `.md` so the gate halts on Page 2 alone. Keep `_database.json` and `AGENTS.md`.
 
@@ -224,9 +226,11 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - Exit code **1**
   - stdout contains `Halted:` and `[conflict]`
   - stderr contains `push halted by validation gate`
-  - **Notion MCP fetch** of Page 2: `Score` is still **200** (canonical from `setup.md`), proving no UpdatePage fired.
+  - **Per-cell conflict report (#103):** under the `[conflict]` line, stdout shows the `Score` cell with **both** sides — `local "999"` and `Notion "200"` — plus the escape-hatch guidance line (`refresh` discards local edits / `push --force` overwrites Notion). Match loosely on the values and the words "discards your local edits", not on exact column spacing.
+  - **Run-summary JSON (#103):** the `halted[]` entry for Page 2 carries a `cells` array containing `{"field":"Score","local":"999","notion":"200"}` — agents get the same evidence as the human view.
+  - **Notion MCP fetch** of Page 2: `Score` is still **200** (canonical from `setup.md`), proving no UpdatePage fired despite the local `999`.
 
-**Revert local edit:** restore Page 2's `notion-last-edited` to its pre-edit value (or just re-run V0 to re-import fresh). No Notion revert needed — nothing was written.
+**Revert local edit:** re-run V0 to re-import fresh (restores both `notion-last-edited` and `Score`). No Notion revert needed — nothing was written.
 
 ### Step V2: Multi-halt aggregation (n22a)
 
@@ -645,6 +649,7 @@ Capture C1's `push --dry-run` stdout.
 ### Step S4 — `halted` with per-halt entries (rides V2)
 Capture V2's `push --yes` stdout.
 - **Pass:** leading byte `{`; `status:"halted"`; `halted[]` has 3 entries, each `phase:"validation"` with non-empty `file`/`reason`/`fix` (Page 2 + Page 3 conflict, `random-stray.md` stray); `pushed:[]`; `skippedNonRow:[{AGENTS.md}]`; exit 1. The JSON precedes the human halt list on stdout; `push halted by validation gate` is in `progress.txt`.
+- **#103 `cells` field:** every `halted[]` entry now carries a `cells` array (never null). For V2 the two conflicts are **timestamp-only** (no property values changed), so their `cells` are `[]`; the stray's `cells` is `[]` too. The populated-`cells` assertion lives in **V1** (Score `999` vs `200`), where a real cell diff is staged.
 
 ### Step S5 — `skippedNonRow` soft-delete reason (rides V3)
 Capture V3's `push --yes` stdout.

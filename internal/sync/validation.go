@@ -75,6 +75,16 @@ type FileClassification struct {
 	// path's ClassReady (client != nil, timestamps matched); nil for the
 	// network-free preview / --force path and for every non-Ready class.
 	page *notion.Page
+
+	// CellDiffs is the per-cell local-vs-Notion divergence on a conflict halt
+	// (issue #103, Option A): one entry per schema-backed field whose local
+	// value differs from Notion's current value. Computed at classification
+	// time from diffRowCells against the page the gate just fetched, so it can
+	// never disagree with the gate. Populated only on ClassHaltConflict (and
+	// only when the gate supplied a schema); nil for every other class. May be
+	// empty on a conflict whose timestamp moved for a non-property reason (page
+	// body / unsupported field edit) — that's a real, distinguishable state.
+	CellDiffs []CellDiff
 }
 
 // ValidationReport is the result of n21+n22 across every file in folderPath.
@@ -261,10 +271,12 @@ func classifyFolder(folderPath string, client NotionClient, schema map[string]no
 		}
 
 		add(FileClassification{
-			Path:     fullPath,
-			Class:    ClassHaltConflict,
-			NotionID: notionID,
-			fm:       fm,
+			Path:      fullPath,
+			Class:     ClassHaltConflict,
+			NotionID:  notionID,
+			fm:        fm,
+			page:      page,
+			CellDiffs: diffRowCells(fm, page, schema),
 			Reason: fmt.Sprintf(
 				"Notion's row has changed since last sync (local %s, Notion %s) — refresh before pushing",
 				localLastEdited, page.LastEditedTime,

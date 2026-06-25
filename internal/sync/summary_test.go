@@ -95,6 +95,50 @@ func TestRunSummary_n41_HaltedStatusFromValidation(t *testing.T) {
 	}
 }
 
+// #103 Option A: a conflict halt entry carries the per-cell diff so an agent gets
+// the same local-vs-Notion evidence the human view prints; non-conflict halts have
+// cells == [] (never null) so an agent can index without a presence check.
+func TestRunSummary_103_ConflictHaltCarriesCellDiff(t *testing.T) {
+	result := &PushResult{
+		Halted: true,
+		Halts: []FileClassification{
+			{
+				Path:  "/abs/folder/row.md",
+				Class: ClassHaltConflict,
+				Reason: "Notion's row has changed since last sync",
+				CellDiffs: []CellDiff{
+					{Field: "Score", Local: "555", Notion: "400"},
+				},
+			},
+			{Path: "/abs/folder/stray.md", Class: ClassHaltUnexpected, Reason: "no notion-id"},
+		},
+	}
+
+	s := result.Summary()
+	if len(s.Halted) != 2 {
+		t.Fatalf("halted = %+v, want 2 entries", s.Halted)
+	}
+	conflict := s.Halted[0]
+	if len(conflict.Cells) != 1 || conflict.Cells[0] != (CellDiff{Field: "Score", Local: "555", Notion: "400"}) {
+		t.Errorf("conflict cells = %+v, want one Score diff", conflict.Cells)
+	}
+	// Non-conflict halt: cells present and empty (marshals [], not null).
+	stray := s.Halted[1]
+	if stray.Cells == nil {
+		t.Errorf("non-conflict halt cells must be [] not nil, got %+v", stray)
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"cells":[{"field":"Score","local":"555","notion":"400"}]`) {
+		t.Errorf("expected conflict cells in JSON, got:\n%s", b)
+	}
+	if !strings.Contains(string(b), `"cells":[]`) {
+		t.Errorf("expected empty cells array for non-conflict halt, got:\n%s", b)
+	}
+}
+
 // A run-wide auth failure (401/403, DAG n34h) is "halted" with a single halted
 // entry tagged phase "auth" carrying the auth reason.
 func TestRunSummary_n41_HaltedStatusFromAuth(t *testing.T) {

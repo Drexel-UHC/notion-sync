@@ -363,6 +363,48 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 	return result, nil
 }
 
+// CellDiff is one schema-backed property whose local frontmatter value differs
+// from Notion's current value (issue #103, Option A). Local and Notion carry the
+// human-readable rendered values so a conflict halt can show both sides without
+// re-decoding. The JSON tags let the RunSummary's conflict halt entry carry the
+// exact same evidence the human view prints — agents and humans read one diff.
+type CellDiff struct {
+	Field  string `json:"field"`
+	Local  string `json:"local"`
+	Notion string `json:"notion"`
+}
+
+// diffRowCells is the canonical per-cell comparison behind both diffRow (which
+// projects it to field names) and the conflict halt's cell report (issue #103,
+// Option A). For each pushable field whose local value differs from the gate's
+// stashed Notion snapshot it emits a CellDiff carrying both rendered values.
+// Routing diffRow through this is the gate-parity guarantee: the conflict report
+// and the push's no-op/changed-field decision are one computation, not two that
+// can drift, so the report can never flag a cell the push wouldn't treat as part
+// of the row's divergence. Pure, no I/O. See diffRow for the comparison rules.
+func diffRowCells(fm map[string]interface{}, snapshot *notion.Page, schema map[string]notion.DatabaseProperty) []CellDiff {
+	remote := map[string]interface{}{}
+	if snapshot != nil {
+		mapPropertiesToFrontmatter(snapshot.Properties, remote, false)
+	}
+	var cells []CellDiff
+	for key, localVal := range fm {
+		prop, ok := pushableField(key, schema)
+		if !ok {
+			continue
+		}
+		if !valuesEqual(prop.Type, localVal, remote[key]) {
+			cells = append(cells, CellDiff{
+				Field:  key,
+				Local:  formatCellValue(prop.Type, localVal),
+				Notion: formatCellValue(prop.Type, remote[key]),
+			})
+		}
+	}
+	sort.Slice(cells, func(i, j int) bool { return cells[i].Field < cells[j].Field })
+	return cells
+}
+
 // diffRow returns the schema-backed property keys whose local frontmatter value
 // differs from the gate's stashed Notion snapshot (DAG n31). Pure, no I/O.
 //
@@ -373,23 +415,28 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 // a real change again. The snapshot is decoded with mapPropertiesToFrontmatter so
 // both sides are compared in the same frontmatter representation they were
 // imported in — rich_text on both sides is the rendered Markdown string.
+//
+// Implemented as a projection of diffRowCells so the changed-field set and the
+// conflict cell report are guaranteed identical (issue #103).
 func diffRow(fm map[string]interface{}, snapshot *notion.Page, schema map[string]notion.DatabaseProperty) []string {
-	remote := map[string]interface{}{}
-	if snapshot != nil {
-		mapPropertiesToFrontmatter(snapshot.Properties, remote, false)
+	cells := diffRowCells(fm, snapshot, schema)
+	changed := make([]string, len(cells))
+	for i, c := range cells {
+		changed[i] = c.Field
 	}
-	var changed []string
-	for key, localVal := range fm {
-		prop, ok := pushableField(key, schema)
-		if !ok {
-			continue
-		}
-		if !valuesEqual(prop.Type, localVal, remote[key]) {
-			changed = append(changed, key)
-		}
-	}
-	sort.Strings(changed)
 	return changed
+}
+
+// formatCellValue renders a frontmatter value for display in a conflict cell
+// report, keyed on the property type so the shown form matches how the diff
+// compared it: multi_select joins its members, everything else coerces to its
+// scalar string (nil / cleared → ""). Display-only — never fed back into a
+// comparison, so it can't perturb gate parity.
+func formatCellValue(propType string, v interface{}) string {
+	if propType == "multi_select" {
+		return strings.Join(coerceStringSlice(v), ", ")
+	}
+	return coerceString(v)
 }
 
 // fieldMismatch is one read-back discrepancy: a changed field whose stored value
