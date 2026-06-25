@@ -26,6 +26,22 @@ func TestAgentsMD_DocumentsRichTextPushLimitations(t *testing.T) {
 	}
 }
 
+// TestAgentsMD_HasDoNotEditBanner pins the DO-NOT-EDIT banner (#87, Bucket 2):
+// AGENTS.md is tool-owned and force-overwritten on version-stamp drift, so the
+// emitted file must announce that up front or the overwrite is a surprise. A
+// future template edit that drops the banner should turn this test red.
+func TestAgentsMD_HasDoNotEditBanner(t *testing.T) {
+	content := renderAgentsMD()
+	for _, want := range []string{
+		"DO NOT EDIT",
+		"regenerated on every import/refresh",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("AGENTS.md missing DO-NOT-EDIT banner marker: %q", want)
+		}
+	}
+}
+
 func TestEnsureAgentsMDCurrent_RewritesIfStaleStamp(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "AGENTS.md")
