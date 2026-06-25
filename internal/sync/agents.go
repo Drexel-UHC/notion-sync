@@ -197,14 +197,18 @@ Key facts for downstream agents:
 
 ### Rich-text fidelity on push
 
-` + "`title`" + ` and ` + "`rich_text`" + ` ("Text") values are stored in your ` + "`.md`" + ` as a **flat Markdown string** — on import Notion's structured formatting is *rendered* to Markdown syntax (e.g. ` + "`**bold**`" + `, ` + "`[text](url)`" + `). Inline formatting (bold, italic, code, strikethrough, highlight, underline, links) is preserved in the file as Markdown. Whether that formatting is reconstructed as Notion formatting on push (vs. written as literal markers) depends on this binary's version — do not assume a Text cell round-trips formatting intact.
+` + "`title`" + ` and ` + "`rich_text`" + ` ("Text") values are stored in your ` + "`.md`" + ` as a **flat Markdown string** — on import Notion's structured formatting is *rendered* to Markdown syntax (e.g. ` + "`**bold**`" + `, ` + "`[text](url)`" + `). Inline formatting (bold, italic, code, strikethrough, highlight, underline, links) is preserved in the file as Markdown. On push these are reconstructed as real Notion formatting — bold, italic, inline code, strikethrough, highlight, underline, and links round-trip intact. Formatting and entities outside that set are written as literal characters; see the degraded attributes below.
 
 Two attributes are **lost at import and therefore can never be restored on push** — they are not in your ` + "`.md`" + ` at all, so no push can reconstruct them:
 
 - **Foreground (text) color** — only *background* highlight survives (as ` + "`==text==`" + `); a colored *text* run keeps its words but loses the color.
 - **` + "`@user`" + ` mention identity** — a user mention is rendered as ` + "`@name`" + `; the user's Notion ID is not retained, so push cannot re-link the mention.
 
-Push does **not** claim to round-trip these. Don't expect a pushed cell to restore the original text color or re-link an ` + "`@user`" + ` mention. (Highlight color is also normalized — any background color round-trips as a single highlight, not its original shade.)
+A third attribute degrades on push even though its characters survive:
+
+- **Inline equation** — an equation imports as the literal text "$expression$" and pushes back as those same characters, so in Notion it stops rendering as math (the characters survive, the equation *type* does not).
+
+Push does **not** claim to round-trip these. Don't expect a pushed cell to restore the original text color, re-link an ` + "`@user`" + ` mention, or re-render an inline equation. (Highlight color is also normalized — any background color round-trips as a single yellow highlight, not its original shade.)
 `
 
 // WriteAgentsMD writes the generated AGENTS.md to the workspace root.
