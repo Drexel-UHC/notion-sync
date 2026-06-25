@@ -267,7 +267,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - stdout does NOT contain `Halted:`.
   - stdout shows `Pushed: 0` **and** `Unchanged: 1` (post-3a the unedited Page 5 diffs to a no-op → `skippedNoOp`, **not** a write), plus a summary line, and NOT `"Nothing to push"` (gate ran). The renderer aligns these lines with whitespace — match on the counts, not the spacing.
   - **Notion MCP fetch** of Page 6: `Score` still **600**, all properties unchanged (skip path proven).
-  - **Notion MCP fetch** of Page 5: `Score` still **500** (round-trip with no value drift).
+  - **Notion MCP fetch** of Page 5: `Score` still **500** (post-3a no-op → `skippedNoOp`, so no Notion write — value simply unchanged).
 
 **Revert:** re-run V0 to re-import fresh. (Post-3a Page 5 no-ops — no Notion write — so there's no `last_edited_time` drift to clean up; the re-import just restores the full folder for the next step.)
 
