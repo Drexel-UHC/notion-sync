@@ -61,6 +61,13 @@ The push e2e DB is dedicated to this skill, but the `setup.md` "do not edit" con
 - Notion-side drift on any of the 8 fixtures — especially Page 4's rich-text annotations (the phase-3 regression target; see `setup.md` "Things to NEVER do")
 - Auto-created `select` / `multi_select` options. Use only the spec'd options: Research / Engineering / Design / Marketing for `Category`; alpha / beta / gamma / delta for `Tags`.
 
+## Notion-read strategy (performance — issue #104)
+
+Wall-clock is dominated by serial Notion round-trips. Two rules cut the read count with **no coverage loss** — apply them everywhere the per-step text says "Notion MCP fetch":
+
+- **B — one `notion-query-data-sources` sweep instead of per-page `notion-fetch` for multi-page *scalar* checks.** A single query (DB `35957008-e885-80c5-9e34-f4191fd83907`, SQL mode) returns every row's scalar properties — `Score`, `Category`, `Due Date` start, etc. — in one call. Use it for F1's canonical sweep and any mid-run multi-page scalar check (V2, V5). **Carve-out — the query flattens rich_text to plain text (zero annotations) and may not project `is_datetime`,** so keep a full `notion-fetch` for exactly three things: **Page 4** rich-text byte-identity, **Page 8** rich-text byte-identity, and the **`Due Date` `is_datetime`** flag. (SQL mode projects column names — sanity-check the exact identifiers when writing the sweep query; assert `is_datetime` via a full fetch regardless.)
+- **C — trust the push read-back store-verify for *positive* writes.** Post-3b every successful push re-fetches and verifies each sent field against what Notion stored (n34d) and reports it in the run-summary JSON. So an independent `notion-fetch` to re-confirm a write that *succeeded* is redundant — assert instead on `Pushed: N` + no `Failed:`/`Conflicts:` line + the summary's `pushed[].fields` (captured in the S-steps). **Keep an independent fetch for what the CLI can't vouch for:** no-write / negative paths (G1 cancel, G4 dry-run, V1/V2/V4 halts, C9 auth) must *independently* prove Notion did **not** change; **Page 4's `Description`** is never *pushed* (C7 edits only `Score`) so store-verify never covers it; and the **R-step round-trip / clear proofs (R2 / R5 / R6)** are independent round-trip checks, **not** redundant positive confirms — never drop them.
+
 ---
 
 ## Setup steps (run for every skill invocation)
@@ -146,7 +153,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - `Pushed >= 1`, `Pushed + Skipped == Total`
   - No `Conflicts:` or `Failed:` lines
   - The canary page's local `.md` now has `notion-last-pushed:`
-  - **Notion MCP fetch** of the canary page: `Score` is now `9999`.
+  - *(No independent fetch — the push store-verifies the write against Notion; **S1** asserts the summary's `pushed[].fields:["Score"]`. See Notion-read strategy C.)*
 
 ### Step G3: Revert via push (`--yes`)
 
@@ -156,7 +163,8 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 
 - **Pass:**
   - Exit code 0
-  - **Notion MCP fetch** of the canary page: `Score` matches the original snapshot value again.
+  - `Pushed: 1` (the revert is a real write), no `Conflicts:`/`Failed:` line
+  - *(No independent fetch — store-verify covers the write. **G4's kept negative fetch transitively confirms the revert landed**: G4 expects `Score` = original snapshot value, which is only true if this revert reached Notion. See Notion-read strategy C.)*
 
 ### Step G4: `--dry-run` skips the gate AND doesn't write
 
@@ -235,7 +243,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - Exit code **1**
   - stdout enumerates **3 halts**: Page 2 `[conflict]`, Page 3 `[conflict]`, `random-stray.md` `[stray]`. Fix-once-rerun-once UX — all three listed in one pass, not "fix the first then come back."
   - Summary line shows a halts count of **3** (the renderer prints `Halts:` followed by aligned whitespace then the number — match loosely on the count, not the spacing).
-  - **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both unchanged.
+  - **One `notion-query-data-sources` sweep** (not two per-page fetches): Page 2 `Score` = **200** and Page 3 `Score` = **300** — both unchanged, proving no UpdatePage fired. See Notion-read strategy B.
 
 **Revert:** re-run V0 to re-import fresh. No Notion revert needed.
 
@@ -291,8 +299,7 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
   - Exit code **0**
   - stdout does NOT contain `Halted:` — gate fully bypassed.
   - stdout shows a Pushed count of **2** (Page 2 + Page 3; the stray has no `notion-id` so `scanPushable` filters it). Match on the count, not the spacing.
-  - **Notion MCP fetch** of Page 2: `Score` is now **2222**.
-  - **Notion MCP fetch** of Page 3: `Score` is now **3333**.
+  - **One `notion-query-data-sources` sweep** (not two per-page fetches): Page 2 `Score` = **2222**, Page 3 `Score` = **3333**. See Notion-read strategy B.
 
 **Revert (mandatory — V5 actually wrote to Notion).** Pick one branch and follow it in order — the two branches need different orderings because re-importing rewrites the entire `.md`, including any local Score edit.
 
@@ -301,14 +308,14 @@ Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-p
 2. Re-run V0 (`./notion-sync.exe import ...`). This pulls Notion's current state — Score `2222`/`3333` and matching `notion-last-edited` — into local Pages 2 & 3.
 3. Edit Page 2's local `Score` → `200` and Page 3's local `Score` → `300`. Timestamps already match Notion, so the gate will pass.
 4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes` (no `--force` — proves the gate clears now that local state is sane).
-5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+5. **One `notion-query-data-sources` sweep** (not two per-page fetches): Page 2 `Score` = 200 and Page 3 `Score` = 300 — both back to canonical. See Notion-read strategy B.
 
 *Branch B — hand-fix (no re-import):*
 1. Restore Page 2's local `Score` → `200` and Page 3's local `Score` → `300`.
 2. Drop the stray `random-stray.md`.
 3. Hand-edit Page 2's & Page 3's `notion-last-edited` to match Notion's current `last_edited_time` (fetch via Notion MCP). Required for the gate to clear without `--force`.
 4. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`.
-5. **Notion MCP fetch** of Page 2 (`Score` 200) and Page 3 (`Score` 300): both back to canonical.
+5. **One `notion-query-data-sources` sweep** (not two per-page fetches): Page 2 `Score` = 200 and Page 3 `Score` = 300 — both back to canonical. See Notion-read strategy B.
 
 ⚠️ Don't mix branches — restoring Score first and then re-importing in step 3 will overwrite your Score edit and round-trip `2222`/`3333` to Notion on the next push.
 
@@ -361,10 +368,10 @@ The original epic symptom: editing one field must not clobber another page's ric
 - **Pass:**
   - Exit 0
   - `Pushed: 1`, `Unchanged: 7`
-  - **Notion MCP fetch Page 4:** `Name` + `Description` annotation payload byte-identical to the step-1 snapshot; `Score` still `400` (Page 4 unchanged → skipped → no `UpdatePage`).
-  - **Notion MCP fetch Page 5:** `Score` is `555`; `Related` still `[Page 4]`; all other props unchanged.
+  - **Notion MCP fetch Page 4 (KEEP — load-bearing negative check):** `Name` + `Description` annotation payload byte-identical to the step-1 snapshot; `Score` still `400` (Page 4 unchanged → skipped → no `UpdatePage`). This is the "editing Page 5 didn't clobber Page 4's formatting" assertion — never drop it.
+  - *(No independent Page 5 fetch — the push store-verifies the `Score` write; `Pushed: 1` + the S-step `pushed[].fields:["Score"]` confirm it landed, and F1's sweep re-checks Page 5 = canonical. Only `Score` was edited locally, so n33's cell-scoped write sends only `Score` — `Related` and every other field are absent from the payload and can't have changed. See Notion-read strategy C.)*
 
-**Revert:** restore Page 5's local `Score` → `500`, re-run the same `push --yes` (`Pushed: 1`, `Unchanged: 7`), then **fetch Page 5** to confirm `Score` is `500` again.
+**Revert:** restore Page 5's local `Score` → `500`, re-run the same `push --yes` (`Pushed: 1`, `Unchanged: 7`). No independent fetch — `Pushed: 1` + store-verify confirm the revert; F1's sweep re-checks Page 5 = `500`.
 
 ### Step C3: rich_text-only edit — ⚠️ CONTRACT FLIPPED in Phase 3d (#99), see R1
 
@@ -457,7 +464,7 @@ Proves the read-back verify passed *and* the restamp wrote back Notion's authori
 - **Pass (second push):**
   - Exit 0, `Pushed: 1`, **no `Conflicts:` line**. A stale or wrong restamp from step 1 would fail the TOCTOU compare here and show a phantom `Conflicts: 1` — a clean push is the proof the restamp stored the value Notion reports on the next read.
 
-**Revert:** restore Page 5's local `Score` → `500`, re-run `push --yes` (`Pushed: 1`), then **fetch Page 5** to confirm `Score` is `500` again.
+**Revert:** restore Page 5's local `Score` → `500`, re-run `push --yes` (`Pushed: 1`). No independent fetch — store-verify + `Pushed: 1` confirm the revert; F1's sweep re-checks Page 5 = `500`. (See Notion-read strategy C.)
 
 ### Step C9: Auth failure halts the run once and writes nothing (n34h) — ⏭️ SKIP until a read-only token exists
 
@@ -657,7 +664,7 @@ Capture the `--force` push stdout from V5 (Pages 2+3) or C6 (Page 5).
 
 ### Step F1: Final state verification
 
-Notion MCP fetch of **every page touched by the run** — Pages 1–8 once any phase 2+ step has executed. Compare against **the canonical values hardcoded in `setup.md`** (per-page property tables) — NOT just the run's own Step 3 fetch. Within-run-only comparison is unsafe: if a prior run left a fixture drifted, a fresh Step 3 fetch records the drifted state and F1 then "matches" itself, silently passing while the bug persists. F1's job is to detect drift against the source-of-truth canonical, full stop.
+**Read via one `notion-query-data-sources` sweep** of the DB (`35957008-e885-80c5-9e34-f4191fd83907`, SQL mode) — **not** a per-page `notion-fetch` of Pages 1–8 (run this once any phase 2+ step has executed). The sweep returns every row's **scalar** properties (`Name`, `Description` as plain text, `Category`, `Score`, `Due Date` start, `Tags`, …) in a single call. Add exactly **three targeted full `notion-fetch` calls** for what the query flattens or omits (see Notion-read strategy B): **Page 4** `Description` rich-text byte-identity, **Page 8** `Description` rich-text byte-identity, and **Page 1's `Due Date` `is_datetime`** flag. Compare against **the canonical values hardcoded in `setup.md`** (per-page property tables) — NOT just the run's own Step 3 fetch. Within-run-only comparison is unsafe: if a prior run left a fixture drifted, a fresh Step 3 fetch records the drifted state and F1 then "matches" itself, silently passing while the bug persists. F1's job is to detect drift against the source-of-truth canonical, full stop.
 
 **Phase 1 minimum — Page 1 (canary):**
 
@@ -669,20 +676,20 @@ Notion MCP fetch of **every page touched by the run** — Pages 1–8 once any p
 | `Score` | `100` | `number` == canonical |
 | `Due Date` | `2026-06-01` (date-only) | `date.start` == canonical AND `is_datetime` == `0`/`false` |
 
-**Phase 2 additions — re-fetch Pages 2, 3, 6, 7 against `setup.md` canonicals.** V1/V2 stale-stamp Pages 2 & 3 (must end at `Score` 200 / 300). V3 marks Page 6 deleted in the local file only (Notion-side `Score` 600 must be untouched). V4 corrupts Page 7's local YAML (Notion-side unchanged). V5 actually writes to Notion — its mandatory revert step must restore Page 2 → 200 and Page 3 → 300 before F1 runs. Don't duplicate the canonical values here — read them from `setup.md`'s per-page sections (Pages 2/3/6/7).
+**Phase 2 additions — check Pages 2, 3, 6, 7 (all scalar → from the sweep) against `setup.md` canonicals.** V1/V2 stale-stamp Pages 2 & 3 (must end at `Score` 200 / 300). V3 marks Page 6 deleted in the local file only (Notion-side `Score` 600 must be untouched). V4 corrupts Page 7's local YAML (Notion-side unchanged). V5 actually writes to Notion — its mandatory revert step must restore Page 2 → 200 and Page 3 → 300 before F1 runs. Don't duplicate the canonical values here — read them from `setup.md`'s per-page sections (Pages 2/3/6/7).
 
-**Phase 3a additions — re-fetch Pages 4, 5, 7 against `setup.md` canonicals.** C2 writes then reverts Page 5 (`Score` must end at 500; `Related` = [Page 4]). **Page 4 is the load-bearing check:** C2/C6 are designed never to write it, so any drift in its `Name` / `Description` annotation payload means the cell-diff skip (C2) or the `--force` isolation (C6) failed — fail the run loudly. Page 7 must remain all-null. C3 edits Page 5's `Description` locally only (no Notion write) — confirm Notion-side `Description` is canonical.
+**Phase 3a additions — check Pages 4, 5, 7 against `setup.md` canonicals** (Page 5 / Page 7 scalars from the sweep; **Page 4's `Description` annotation payload via the targeted full fetch**). C2 writes then reverts Page 5 (`Score` must end at 500; `Related` = [Page 4]). **Page 4 is the load-bearing check:** C2/C6 are designed never to write it, so any drift in its `Name` / `Description` annotation payload means the cell-diff skip (C2) or the `--force` isolation (C6) failed — fail the run loudly. Page 7 must remain all-null. C3 edits Page 5's `Description` locally only (no Notion write) — confirm Notion-side `Description` is canonical.
 
 **Phase 3b/3c additions — Page 4 is *doubly* load-bearing now.** C7 deliberately writes+reverts Page 4's `Score` (must end at `400`) and its `Description` annotation payload must be **byte-identical to canonical** — drift means n33's cell-scoped write regressed and re-sent the whole row. C8 writes+reverts Page 5's `Score` (must end at `500`). C9, if it ran (token present), wrote nothing, so Pages 2 & 3 must equal canonical (`Score` 200 / 300); if C9 was skipped, no extra check.
 
-**Phase 3d additions — re-fetch Pages 5 and 8 against `setup.md` canonicals.** The `R` steps write+revert Page 5's `Description` (R1/R3/R4/R5) and `Score` (R4) and Page 8's `Description` (R2/R6) — all must end at canonical:
+**Phase 3d additions — check Pages 5 and 8 against `setup.md` canonicals** (Page 5 scalars from the sweep; **Page 8's `Description` annotation payload via the targeted full fetch**). The `R` steps write+revert Page 5's `Description` (R1/R3/R4/R5) and `Score` (R4) and Page 8's `Description` (R2/R6) — all must end at canonical:
 - **Page 8 is the load-bearing rich-text check:** its `Description` annotation payload must be **byte-identical** to the setup.md canonical (the 6 supported runs, highlight = `yellow_background`). Drift means a round-trip (R2) or `--force` (R6) regressed — fail loudly. R6 never edits Page 8 (force re-sends in-sync), so any annotation drift there means `--force` corrupted a *supported* format, a real bug.
 - **Page 5** must end at `Score` 500 and its plain canonical `Description` — R1/R3/R4/R5 each revert it; a leftover ` EDITED`, the #575 bundle string, `**bold mix**`, or an empty `Description` means a revert was skipped.
 - **Page 4 stays the equation canary:** the R steps never touch it, so its `Description` (incl. the `$E = mc^2$` run) must equal canonical — any drift means an R step leaked onto Page 4 (isolation failure).
 
 If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
 
-**Note on `Due Date`:** the `is_datetime` flag is load-bearing here. A common bug class is push promoting date-only properties to UTC datetimes (the original parser-roundtrip bug). F1 must assert *both* `start` matches AND `is_datetime` is false; matching only on the calendar day misses the type drift.
+**Note on `Due Date`:** the `is_datetime` flag is load-bearing here. A common bug class is push promoting date-only properties to UTC datetimes (the original parser-roundtrip bug). F1 must assert *both* `start` matches AND `is_datetime` is false; matching only on the calendar day misses the type drift. The sweep gives `start`; **`is_datetime` comes from the targeted full fetch on Page 1** (SQL mode may not project it) — one of F1's three full fetches.
 
 ### Step F2: Cleanup
 
