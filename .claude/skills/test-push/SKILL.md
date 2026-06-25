@@ -378,7 +378,7 @@ Left here as a signpost so the Phase 3a section isn't stale and C-numbering does
 2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
 
 - **Pass:**
-  - `Unchanged: 7`, `Pushed: 0`.
+  - `Unchanged: 8`, `Pushed: 0`.
   - **Notion MCP fetch Page 5:** `Tags` still the set `{beta, gamma}`.
 
 **Revert:** restore local order or re-run C0. No Notion write.
@@ -706,7 +706,7 @@ Print a summary table:
 | 1    | Clean slate                             | PASS   |
 | 2    | Fresh import                            | PASS   |
 | 3    | Snapshot the canary page                | PASS   |
-| 4    | Isolate canary (delete Pages 2-7 .md)   | PASS   |
+| 4    | Isolate canary (delete Pages 2-8 .md)   | PASS   |
 | G1   | Cancel without --yes (no Notion write)  | PASS   |
 | G2   | --yes proceeds, Notion updated          | PASS   |
 | G3   | Revert via push --yes                   | PASS   |
@@ -741,7 +741,7 @@ Print a summary table:
 | S4   | halted entries, exit 1 (rides V2)       | PASS   |
 | S5   | skippedNonRow soft-delete (rides V3)    | PASS   |
 | S6   | --force fields fallback (rides V5/C6)   | PASS   |
-| F1   | Final state matches canonical (1–7)     | PASS   |
+| F1   | Final state matches canonical (1–8)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```
 
