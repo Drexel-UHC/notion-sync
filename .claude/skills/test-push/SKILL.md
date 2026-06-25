@@ -58,7 +58,7 @@ This skill must be **idempotent** — runnable cleanly on a fresh checkout AND i
 
 The push e2e DB is dedicated to this skill, but the `setup.md` "do not edit" conventions still apply across runs and across phases. Don't leave behind:
 - Locally-edited `.md` files with non-original property values (Step 3 documents the originals; F1 verifies them)
-- Notion-side drift on any of the 7 fixtures — especially Page 4's rich-text annotations (the phase-3 regression target; see `setup.md` "Things to NEVER do")
+- Notion-side drift on any of the 8 fixtures — especially Page 4's rich-text annotations (the phase-3 regression target; see `setup.md` "Things to NEVER do")
 - Auto-created `select` / `multi_select` options. Use only the spec'd options: Research / Engineering / Design / Marketing for `Category`; alpha / beta / gamma / delta for `Tags`.
 
 ---
@@ -330,7 +330,7 @@ Two behaviors the steps below pin:
 
 ### Step C0: Re-import for Phase 3
 
-Phase 2 leaves drift / a partial folder. Re-import a clean all-7 folder.
+Phase 2 leaves drift / a partial folder. Re-import a clean all-8 folder.
 
 Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./test-output/push-e2e`
 

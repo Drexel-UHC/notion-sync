@@ -86,9 +86,9 @@ Use `update-data-source` to add the schema in a single call. Schema is a **subse
 - `people`, `files`, `created_time`, `last_edited_time`, `created_by`, `last_edited_by`
 - `formula`, `rollup`, `button`, `unique_id`, `verification`, `status`
 
-## Step 3: Create the 7 fixture pages
+## Step 3: Create the 8 fixture pages
 
-Use `create-pages` with `parent: {"data_source_id": "<data_source_id>"}`. **All 7 pages in a single API call** so they share a creation timestamp.
+Use `create-pages` with `parent: {"data_source_id": "<data_source_id>"}`. Create **Pages 1–7 in a single API call** so they share a creation timestamp; **Page 8 was added later in its own `create-pages` call** (it carries a distinct ID prefix `38a57008…` and creation timestamp — see its subsection below).
 
 ### Page 1 — "Push: Canary" — phase 1 gate
 
@@ -279,7 +279,7 @@ Both resolve to the same Notion annotations, so the create-via-MCP page imports 
 
 ## Step 4: Wire up relations
 
-After all 7 pages exist, use `update-page` to set `Related` on a couple of pages so the relation property type has coverage:
+After all 8 pages exist, use `update-page` to set `Related` on a couple of pages so the relation property type has coverage:
 
 - Page 1 (Canary) → relates to Page 4 (Formatting Fixture)
 - Page 5 (Cell-Level) → relates to Page 4 (Formatting Fixture)
@@ -338,7 +338,7 @@ Phase 3 will use this to verify that pushing an unrelated field on Page 5 does N
 
 ## State invariants for `/test-push`
 
-The skill MUST ensure all 7 pages return to their original (Step 3) values after every run. The skill's Step F1 ("Final state verification") snapshots Notion via `notion-fetch` against the values documented in this file and fails the run if any drift remains.
+The skill MUST ensure all 8 pages return to their original (Step 3) values after every run. The skill's Step F1 ("Final state verification") snapshots Notion via `notion-fetch` against the values documented in this file and fails the run if any drift remains.
 
 If a run crashes mid-way and leaves drift:
 - Re-importing into a fresh `test-output/push-e2e/` folder doesn't fix Notion-side drift — only local state
