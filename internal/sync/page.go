@@ -199,8 +199,9 @@ func FreezeStandalonePage(opts StandalonePageImportOptions) (*PageFreezeResult, 
 		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
-	// Write AGENTS.md at workspace root
-	if err := WriteAgentsMD(opts.OutputFolder); err != nil {
+	// Write AGENTS.md at workspace root (creates if missing, force-upgrades on
+	// version drift).
+	if err := syncAgentsMD(opts.OutputFolder); err != nil {
 		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
@@ -228,8 +229,8 @@ func RefreshStandalonePage(opts RefreshStandalonePageOptions) (*PageFreezeResult
 
 	workspacePath := filepath.Dir(filepath.Dir(opts.FolderPath)) // pages/<folder> → workspace
 
-	// Backfill AGENTS.md at workspace root
-	if err := WriteAgentsMD(workspacePath); err != nil {
+	// Backfill / upgrade AGENTS.md at workspace root.
+	if err := syncAgentsMD(workspacePath); err != nil {
 		log.Printf("warning: failed to write AGENTS.md: %v", err)
 	}
 
