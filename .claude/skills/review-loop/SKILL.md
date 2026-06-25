@@ -8,7 +8,7 @@ description: >
   (the reviewer) and /ship (commit + push). Use when the user wants to "review and
   fix" a PR, "auto-review", "run a review loop", or "converge" a PR to approval.
 metadata:
-  version: "0.1"
+  version: "0.2"
 ---
 
 # Review Loop
@@ -30,13 +30,31 @@ merges.
 `/review-loop [PR-url-or-number]  [max-passes=N]`
 
 - No argument → review the current branch's PR (or the current diff vs `main` if no PR exists yet).
-- `max-passes` defaults to **3**.
+- `max-passes` defaults to **5**.
 
-**This skill commits and pushes to the PR's branch.** Before the first fix on each invocation, ask
-the user to confirm that's okay (use `AskUserQuestion`) and proceed only on an explicit yes — a fresh
-confirmation every run, not a standing grant. That yes covers commit + push to the PR branch for this
-run only; it is **never** authorization to merge, force-push, rewrite history, or touch files outside
-the PR's scope — those remain escalations (see Triage).
+**This skill commits and pushes to the PR's branch — and is pre-authorized to do so.** Invoking the
+skill *is* the grant: commit + push to the PR's branch runs **without a per-run confirmation prompt**.
+That standing grant covers commit + push **only**; it is **never** authorization to merge, force-push,
+rewrite history, or touch files outside the PR's scope — those remain escalations (see Triage), and the
+`Never` rules at the end still bind every run.
+
+## Default mode: foreground, no watchdog
+
+By default the loop runs **unattended with minimal prompts**:
+
+- **Reviews run in the foreground** — a plain blocking `Agent` spawn. Prompts pass through normally, so
+  there's no auto-deny risk and **Step 0 (permission preflight) is skipped**.
+- **The hang watchdog is off.** If a review subagent ever stalls on an inference hang, stop it manually
+  (`/agents` **Running** tab, or **Ctrl+B**) and re-invoke — there's no auto-timeout in this mode.
+- **Commit + push are pre-authorized** (see Invocation) — no per-run confirmation.
+
+So a default run only ever stops to ask you on a genuine **escalation** (an
+[escape criterion](#escape-criteria)) or halts at the **pass cap** — nothing else.
+
+**Watchdog mode is opt-in:** enable it only when the user asks for it (or passes `--watchdog`). It
+backgrounds each review behind a liveness watchdog so a stalled API call can't freeze an unattended
+run — at the cost of running **Step 0 (permission preflight)** first and pre-granting the review's
+tools (see [Hang watchdog](#hang-watchdog--bound-each-review-spawn)).
 
 ## Staging temp files — `.context/.tmp/` only
 
@@ -65,8 +83,9 @@ or Required findings outstanding.
 
 ## The loop
 
-Run **step 0 once** at the start of the invocation; then for each pass `N` starting at 1, run steps
-1–9:
+Run **step 0 once** at the start of the invocation *(watchdog mode only — skipped by default; see
+[Default mode](#default-mode-foreground-no-watchdog))*; then for each pass `N` starting at 1, run
+steps 1–9:
 
 > **Invariant — a review comment every pass, a fixes comment when you commit.** Each pass posts a
 > **review comment** (`Code Review (Pass N)`) in step 2, immediately after the cold review and
@@ -76,7 +95,7 @@ Run **step 0 once** at the start of the invocation; then for each pass `N` start
 > pass 1 that posts nothing, so the pass-2 Approve comment scans zero prior comments and mislabels
 > itself "Pass 1.")
 
-### 0. Permission preflight — once, before pass 1
+### 0. Permission preflight — once, before pass 1 *(watchdog mode only — skipped by default)*
 
 The loop backgrounds the review (see [Hang watchdog](#hang-watchdog--bound-each-review-spawn)), and a
 **background subagent auto-denies any tool call that would otherwise prompt** — so if the session
@@ -114,9 +133,11 @@ rather than launch silently broken.
 
 Every pass — pass 1 included — gets a **fresh, cold review**: spawn a subagent that runs the actual
 `/critical-code-reviewer` skill on the target, exactly as if a brand-new session typed
-`/critical-code-reviewer <PR link>`. See [The review subagent](#the-review-subagent) for how, and
-spawn it through the **[hang watchdog](#hang-watchdog--bound-each-review-spawn)** (background +
-liveness watchdog + bounded retry) so a stalled Claude API call can't freeze the loop indefinitely.
+`/critical-code-reviewer <PR link>`. See [The review subagent](#the-review-subagent) for how. **By
+default spawn it in the foreground** (a plain blocking `Agent` call) — prompts pass through and no
+preflight is needed. **Only in [watchdog mode](#default-mode-foreground-no-watchdog)** spawn it through
+the **[hang watchdog](#hang-watchdog--bound-each-review-spawn)** (background + liveness watchdog +
+bounded retry) so a stalled Claude API call can't freeze an unattended loop indefinitely.
 The loop driver never reviews in its own context — it triages, fixes, and ships; the skill judges.
 That keeps every verdict independent (pass 2+ never inherits your reasoning for the fixes it's
 checking) and ends the run cleanly at the `## Verdict` line.
@@ -161,9 +182,18 @@ spawn pass `N+1` (which gets its own step-2 review comment, correctly numbered).
 
 ### 5. Fix (the "Fix now" bucket only)
 
+- **Editing in-scope files is pre-authorized — no per-edit confirmation.** Invoking the loop grants
+  `Edit`/`Write` on the files in scope, **including skill/code files under `.claude/`** when the PR
+  itself touches them. Don't pause to ask "may I edit this?"; just apply the fix. (This is the *source*
+  grant; the harness still needs `Edit`/`Write` allowed in settings to run prompt-free — see
+  [Editing permissions](#editing-permissions).)
 - Stay inside the **scope guard**: edit only files the PR already touches plus the directly-required
-  ripple. A finding that wants a broad refactor is a *Defer* or *Escalate*, not a fix.
+  ripple. A finding that wants a broad refactor is a *Defer* or *Escalate*, not a fix. The pre-auth
+  above covers in-scope edits **only** — it never widens the scope guard.
 - Match surrounding code style and the project's conventions (CLAUDE.md, glossary).
+- The `.claude/` **no-stage** rule (see [Staging temp files](#staging-temp-files--contexttmp-only)) is
+  unchanged: it forbids *scratch/temp* files under `.claude/`, not legitimate edits to in-scope
+  `.claude/` source that the PR is actually changing.
 
 ### 6. Verify before committing
 
@@ -254,7 +284,12 @@ cold eyes.
 Cross-pass memory lives in the loop, not the subagent: *you* compare each cold verdict against prior
 passes to catch oscillation (see [Loop or cap](#9-loop-or-cap)).
 
-## Hang watchdog — bound each review spawn
+## Hang watchdog — bound each review spawn *(opt-in; off by default)*
+
+> **Off by default.** The loop runs reviews in the foreground (see
+> [Default mode](#default-mode-foreground-no-watchdog)). Everything below applies **only** when the
+> user opts into watchdog mode (asks for it, or passes `--watchdog`). In that mode, also run
+> [Step 0 (permission preflight)](#0-permission-preflight--once-before-pass-1).
 
 The review is the one step that runs **unattended and repeatedly**, so it's where a stalled Claude
 API call can freeze the whole loop. An *inference hang* is the call **between the subagent's turns**
@@ -372,6 +407,26 @@ goal Claude checks before stopping" — **not** a user-defined skill, so don't g
 `.claude/skills/` and don't flag it as missing; it ships with Claude Code. This is
 belt-and-suspenders, not required — and it must still honour the escape criteria (escalation is a
 valid stop).
+
+## Editing permissions
+
+The Step-5 pre-auth above tells *the loop* not to ask before editing in-scope files. But a markdown
+grant can't suppress a **harness** permission prompt — that's governed by `settings.json` /
+`settings.local.json`. For the loop to actually run **prompt-free on edits**, the session must allow
+the edit tools:
+
+```jsonc
+// .claude/settings.local.json → "permissions": { "allow": [ ... ] }
+"Edit", "Write"
+```
+
+- These are added to this project's `settings.local.json`. The grant is **project-wide** (every session
+  in this repo), not scoped to the loop — permissions live in settings, and skills can't carry their
+  own enforced scope. The Step-5 **scope guard** is what keeps the loop's edits bounded to the PR.
+- **Caveat:** edits to paths under `.claude/` may still trip the harness's built-in *sensitive-file*
+  confirmation even with `Edit`/`Write` allowed. If a legitimate in-scope `.claude/` edit prompts mid-
+  run, that's the harness, not this skill — approve it once, or run under an `auto` /
+  `bypassPermissions` permission mode for a fully unattended pass.
 
 ## Never
 
