@@ -356,7 +356,7 @@ Notion-side `GetPage` 404 (a `notion-id` that points to no live, shared page) cl
    ---
    notion-id: ffffffff-ffff-ffff-ffff-ffffffffffff
    notion-last-edited: "2020-01-01T00:00:00Z"
-   Name: Push: Unreachable Synthetic
+   Name: "Push: Unreachable Synthetic"
    ---
    # unreachable synthetic
    ```
