@@ -397,6 +397,62 @@ func TestRenderHaltedResult_FormatsHeaderAndPerHaltLines(t *testing.T) {
 	}
 }
 
+// #103 Option A: a [conflict] halt prints a per-cell local-vs-Notion block under
+// the halt line plus the escape-hatch guidance, so the user decides with evidence.
+// Pins that both values appear, each labeled local/Notion, and that the guidance
+// states refresh discards local edits (the honest-limit copy).
+func TestRenderHaltedResult_ConflictShowsPerCellDiffAndGuidance(t *testing.T) {
+	halts := []sync.FileClassification{
+		{
+			Path:   "/tmp/folder/row.md",
+			Class:  sync.ClassHaltConflict,
+			Reason: "Notion's row has changed since last sync (local x, Notion y) — refresh before pushing",
+			CellDiffs: []sync.CellDiff{
+				{Field: "Score", Local: "555", Notion: "400"},
+				{Field: "Status", Local: "In Progress", Notion: "Done"},
+			},
+		},
+	}
+	result := &sync.PushResult{Title: "DB", Total: 7, Halted: true, Halts: halts}
+	var buf bytes.Buffer
+	renderHaltedResult(result, &buf)
+	out := buf.String()
+
+	for _, want := range []string{
+		`Score:`, `local "555"`, `Notion "400"`,
+		`Status:`, `local "In Progress"`, `Notion "Done"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected per-cell output to contain %q, got:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, "discards your local edits") || !strings.Contains(out, "--force") {
+		t.Errorf("expected escape-hatch guidance (refresh discards / --force overwrites), got:\n%s", out)
+	}
+}
+
+// #103: a conflict whose timestamp moved for a non-property reason (page body /
+// unsupported field) has no differing cells — say so explicitly, and still show
+// the guidance, rather than printing a bare halt line with no cell block.
+func TestRenderHaltedResult_ConflictWithNoCellsExplainsAndGuides(t *testing.T) {
+	result := &sync.PushResult{
+		Title: "DB", Total: 1, Halted: true,
+		Halts: []sync.FileClassification{
+			{Path: "/tmp/folder/row.md", Class: sync.ClassHaltConflict, Reason: "Notion's row has changed since last sync"},
+		},
+	}
+	var buf bytes.Buffer
+	renderHaltedResult(result, &buf)
+	out := buf.String()
+
+	if !strings.Contains(out, "no property cells differ") {
+		t.Errorf("expected empty-cell explanation, got:\n%s", out)
+	}
+	if !strings.Contains(out, "discards your local edits") {
+		t.Errorf("expected guidance even with no cells, got:\n%s", out)
+	}
+}
+
 // renderAuthHaltedResult formats the summary the CLI prints when a write returns
 // 401/403 mid-run (DAG n34h). Unlike the validation halt, rows can have pushed
 // before the credential failed — the output must own up to that partial progress

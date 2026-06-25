@@ -40,12 +40,15 @@ type FailedEntry struct {
 }
 
 // HaltedEntry is a halt that aborted (validation) or stopped (auth) the run.
-// Phase is "validation" or "auth".
+// Phase is "validation" or "auth". Cells carries the per-cell local-vs-Notion
+// diff on a conflict halt (issue #103, Option A) so an agent gets the same
+// evidence as the human view; it is [] (never null) for non-conflict halts.
 type HaltedEntry struct {
-	File   string `json:"file"`
-	Reason string `json:"reason"`
-	Fix    string `json:"fix"`
-	Phase  string `json:"phase"`
+	File   string     `json:"file"`
+	Reason string     `json:"reason"`
+	Fix    string     `json:"fix"`
+	Phase  string     `json:"phase"`
+	Cells  []CellDiff `json:"cells"`
 }
 
 // Summary maps the accumulated PushResult into the RunSummary contract,
@@ -68,6 +71,9 @@ func (r *PushResult) Summary() RunSummary {
 			Reason: h.Reason,
 			Fix:    haltFix(h.Class),
 			Phase:  "validation",
+			// Conflict halts carry the per-cell diff (#103); other classes
+			// have nil CellDiffs, folded to [] so the array never marshals null.
+			Cells: append([]CellDiff{}, h.CellDiffs...),
 		})
 	}
 	// Auth halt (DAG n34h): run-wide, so no single file owns it (File empty).
@@ -79,6 +85,7 @@ func (r *PushResult) Summary() RunSummary {
 			Reason: reason,
 			Fix:    fix,
 			Phase:  "auth",
+			Cells:  []CellDiff{},
 		})
 	}
 	return s

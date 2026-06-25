@@ -263,7 +263,44 @@ func renderHaltedResult(result *sync.PushResult, w io.Writer) {
 	fmt.Fprintf(w, "  Halts:     %d (nothing pushed — fix all before retrying)\n", len(result.Halts))
 	for _, h := range result.Halts {
 		fmt.Fprintf(w, "    - %s [%s] — %s\n", filepath.Base(h.Path), haltClassLabel(h.Class), h.Reason)
+		if h.Class == sync.ClassHaltConflict {
+			renderConflictCells(w, h.CellDiffs)
+		}
 	}
+}
+
+// renderConflictCells prints the per-cell local-vs-Notion divergence under a
+// [conflict] halt line (issue #103, Option A), then the escape-hatch guidance.
+// Each differing cell shows both values, column-aligned, so the user can decide
+// "keep mine or take theirs" with evidence instead of a blind coin-flip. A
+// conflict with no differing cells (timestamp moved for a non-property reason —
+// page body / unsupported field) says so explicitly rather than printing nothing.
+//
+// Honest-limit copy (issue #103): a 2-way diff cannot tell your edit from theirs,
+// so the guidance states plainly that refresh discards local edits — it can't
+// auto-warn which specific local change would be lost.
+func renderConflictCells(w io.Writer, cells []sync.CellDiff) {
+	if len(cells) == 0 {
+		fmt.Fprintf(w, "        (no property cells differ — Notion's page body or an unsupported field changed)\n")
+	} else {
+		// Column widths: pad "<field>:" and the local segment so the Notion
+		// column lines up across rows.
+		labelW, localW := 0, 0
+		for _, c := range cells {
+			if n := len(c.Field) + 1; n > labelW {
+				labelW = n
+			}
+			if n := len(fmt.Sprintf("local %q", c.Local)); n > localW {
+				localW = n
+			}
+		}
+		for _, c := range cells {
+			label := c.Field + ":"
+			local := fmt.Sprintf("local %q", c.Local)
+			fmt.Fprintf(w, "        %-*s %-*s  Notion %q\n", labelW, label, localW, local, c.Notion)
+		}
+	}
+	fmt.Fprintf(w, "      → `refresh` takes Notion's values (discards your local edits); `push --force` overwrites Notion with yours\n")
 }
 
 // renderAuthHaltedResult writes the auth-halt summary (DAG n34h) to w. Separate

@@ -536,6 +536,97 @@ func TestDiffRow_n31_TitleChangeDetected(t *testing.T) {
 	}
 }
 
+// #103 Option A: diffRowCells reports each differing cell with BOTH values
+// rendered, sorted by field, so the conflict halt can show local-vs-Notion.
+// multi_select members join with ", "; a scalar carries its coerced string.
+func TestDiffRowCells_103_ReportsBothValuesPerChangedCell(t *testing.T) {
+	score := 400.0
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Score":  {Type: "number", Number: &score},
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+			"Tags": {Type: "multi_select", MultiSelect: []notion.SelectValue{
+				{Name: "a"}, {Name: "b"},
+			}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{
+		"Score":  {Type: "number"},
+		"Status": {Type: "select"},
+		"Tags":   {Type: "multi_select"},
+	}
+	fm := map[string]interface{}{
+		"Score":  555.0,
+		"Status": "In Progress",
+		"Tags":   []interface{}{"a", "c"},
+	}
+
+	cells := diffRowCells(fm, snapshot, schema)
+	if len(cells) != 3 {
+		t.Fatalf("expected 3 changed cells, got %v", cells)
+	}
+	// Sorted by field: Score, Status, Tags.
+	want := []CellDiff{
+		{Field: "Score", Local: "555", Notion: "400"},
+		{Field: "Status", Local: "In Progress", Notion: "Done"},
+		{Field: "Tags", Local: "a, c", Notion: "a, b"},
+	}
+	for i, w := range want {
+		if cells[i] != w {
+			t.Errorf("cell[%d] = %+v, want %+v", i, cells[i], w)
+		}
+	}
+}
+
+// #103: the conflict cell list must be DERIVED from diffRow (one computation, not
+// two), so diffRow's field set is exactly the projection of diffRowCells's fields
+// on the same inputs — guaranteeing the report can't flag a cell the gate wouldn't.
+func TestDiffRowCells_103_ProjectsToDiffRow(t *testing.T) {
+	score := 400.0
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Score":  {Type: "number", Number: &score},
+			"Status": {Type: "select", Select: &notion.SelectValue{Name: "Done"}},
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{
+		"Score":  {Type: "number"},
+		"Status": {Type: "select"},
+	}
+	fm := map[string]interface{}{"Score": 555.0, "Status": "Done"} // only Score differs
+
+	cells := diffRowCells(fm, snapshot, schema)
+	names := diffRow(fm, snapshot, schema)
+	if len(cells) != len(names) {
+		t.Fatalf("diffRowCells (%d) and diffRow (%d) disagree on count", len(cells), len(names))
+	}
+	for i := range cells {
+		if cells[i].Field != names[i] {
+			t.Errorf("field mismatch at %d: cell %q vs name %q", i, cells[i].Field, names[i])
+		}
+	}
+	if len(names) != 1 || names[0] != "Score" {
+		t.Errorf("expected only Score to differ, got %v", names)
+	}
+}
+
+// #103: a cleared scalar shows as "" on the side that's empty, so the user sees
+// "set X" vs "cleared" rather than a blank line with no signal.
+func TestDiffRowCells_103_ClearedSideRendersEmptyString(t *testing.T) {
+	snapshot := &notion.Page{
+		Properties: map[string]notion.Property{
+			"Website": {Type: "url", URL: nil}, // cleared on Notion
+		},
+	}
+	schema := map[string]notion.DatabaseProperty{"Website": {Type: "url"}}
+	fm := map[string]interface{}{"Website": "https://example.com"}
+
+	cells := diffRowCells(fm, snapshot, schema)
+	if len(cells) != 1 || cells[0].Notion != "" || cells[0].Local != "https://example.com" {
+		t.Errorf("expected local set / Notion cleared, got %+v", cells)
+	}
+}
+
 // n32a wiring: a row whose local frontmatter already matches Notion's stored
 // values produces no diff, so the push loop skips it as skippedNoOp and never
 // calls UpdatePage — no redundant write, no wasted timestamp churn.
