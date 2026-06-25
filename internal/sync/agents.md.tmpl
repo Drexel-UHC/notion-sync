@@ -150,20 +150,32 @@ For multi-source databases, the **top-level** `_database.json` has no `dataSourc
 
 `notion-sync push <folder>` is the reverse direction: it reads frontmatter from local `.md` files and writes property changes back to Notion. **Page body content is never touched — only properties.**
 
-Push has three things a downstream agent must get right: a **confirmation gate** (you need `--yes`), an **all-or-nothing validation gate** (one bad file aborts the whole run), and a **JSON run summary** on stdout (your machine-readable result). They're covered below in that order.
+### Push is a guarded operation — default to NOT pushing
 
-### Confirmation gate — pass `--yes` for non-interactive runs
+`push` is the **only** command that mutates the user's live Notion workspace, and its writes are not trivially reversible. Treat it as privileged and act conservatively. notion-sync enforces a confirmation gate and an all-or-nothing validation gate; your job is to **satisfy** those guardrails, never to circumvent them.
 
-Before any Notion API call, push previews the queue and asks for consent:
+**Every condition below must hold before you push. If any fails, do not push — stop and report to the human with the blocker and its fix.**
 
-- **Interactive (a real terminal):** prints the queue to stderr, waits for `y/N`, default **N**.
-- **Non-interactive (piped / CI / agent):** there is no prompt. Push **requires `--yes`**; without it the run **cancels and writes nothing** — `status: "cancelled"`, exit 0.
+1. **Explicit human authorization** — push only when a human asked you to, for this specific change. Never push on your own initiative.
+2. **Workspace in sync** — run `refresh` first and resolve any conflict (drift) at the source. A conflict means Notion changed under you; reconcile it, don't override it.
+3. **Reviewed dry run** — run `push --dry-run`, show the human what would change, and get their OK before the real push.
+4. **Validation gate clean** — no halt-class files (table below). A halt means *stop and report*, not *force through*.
+5. **Human consent to the write** — the confirmation gate (next section) is that checkpoint.
 
-An agent should always run `notion-sync push <folder> --yes`. A cancel is not an error (exit 0) — read the summary's `status`, not just the exit code, to tell "cancelled" from "clean".
+**Never silence a guardrail to make a push succeed.** `--force`, `--allow-new-options`, and a reflexive `--yes` all suppress protections that exist for the user's data — use them only on explicit, per-run human instruction, never to clear a halt you hit on your own. When in doubt, **do not push — hand back to the human.**
 
-### Validation gate — all-or-nothing
+### Confirmation gate — the human-consent checkpoint
 
-After consent, push classifies every `.md` in the folder. If **any** file is a halt class, the **entire run aborts before a single write** (`status: "halted"`, non-zero exit). This is deliberate — you never get a half-applied batch. A single conflicting row stops the whole push; rows are **not** pushed best-effort.
+Before any Notion API call, push previews the queue and asks for consent. This gate exists so a human signs off on the write; it is not an obstacle to route around.
+
+- **Interactive (a real terminal):** push prints the queue to stderr and waits for `y/N`, default **N**. Let the human answer.
+- **Non-interactive (piped / CI / agent):** there is no prompt — push **requires `--yes`** or it cancels and writes nothing (`status: "cancelled"`, exit 0).
+
+Pass `--yes` **only after a human has reviewed the dry run and approved this push** (or has given standing authorization for unattended runs). Do **not** add `--yes` reflexively to stop push from cancelling — a cancelled run is the safe default. Treat "cancelled" as "ask the human," not "retry with `--yes`." Read the summary's `status` (not just the exit code) to tell "cancelled" from "clean".
+
+### Validation gate — all-or-nothing; a halt means stop
+
+After consent, push classifies every `.md` in the folder. If **any** file is a halt class, the **entire run aborts before a single write** (`status: "halted"`, non-zero exit). A halt is a signal to **stop and report to the human** — with the reason and fix below — not to reach for `--force`. You never get a half-applied batch; a single conflicting row stops the whole push.
 
 | Halt class | Meaning | Fix |
 | --- | --- | --- |
@@ -174,12 +186,17 @@ After consent, push classifies every `.md` in the folder. If **any** file is a h
 | `unreadable` | File could not be read from disk | fix permissions |
 | `unreachable` | Notion could not be reached to check the row | retry when Notion is reachable |
 
-### Flags
+### Override flags — explicit human authorization required
 
-- `--yes` / `-y` — skip the prompt; **required non-interactively**.
-- `--force` / `-f` — **skip the validation gate entirely** (bypasses *every* halt class above) and blind-overwrite all pushable fields. Local wins unconditionally; use sparingly.
-- `--dry-run` — classify and diff but make **no** Notion API calls; reports what *would* push.
-- `--allow-new-options` — let unknown `select` / `multi_select` values auto-create options in Notion (`status` is always validated — its options can't be created via the API).
+These disable safety. Use them **only** when a human explicitly instructs you to, for a specific run — never on your own initiative to clear a halt:
+
+- `--force` / `-f` — skips the **entire** validation gate (every halt class above) and blind-overwrites Notion with local values. Conflicts and all: local wins unconditionally. Highest blast radius.
+- `--allow-new-options` — lets unknown `select` / `multi_select` values create **new** options in the user's Notion schema (`status` is always validated — its options can't be created via the API).
+
+### Routine flags
+
+- `--dry-run` — classify and diff with **no** Notion API calls; the safe way to preview a push. Always prefer this first.
+- `--yes` / `-y` — the consent token for the confirmation gate (above). Required non-interactively; pass only with human approval.
 
 ### What gets written
 
@@ -208,6 +225,7 @@ Every terminal path (success, halt, cancel) prints **one JSON object first on st
 - All six arrays are always present (`[]` when empty) — index without a presence check.
 - On a `conflict` halt the entry's `cells[]` lists each differing field with both the local and Notion value, so you can reconcile without re-fetching. `phase` is `validation` (pre-write gate) or `auth` (a 401/403 mid-run).
 - **Exit code:** `0` for `clean` / `cancelled` / dry-run; **non-zero** for `partial` / `halted`. Prefer `status` over the exit code when branching.
+- **On any `halted`, `partial`, or `cancelled` outcome, report the entry's `reason` and `fix` to the human and stop** — do not auto-retry with `--force` / `--allow-new-options`. Whether to override a guardrail is the human's decision, not yours.
 
 ### Rich-text fidelity on push
 
