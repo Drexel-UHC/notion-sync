@@ -19,8 +19,9 @@ Reproducible protocol for creating a Notion database dedicated to E2E testing of
 | 5 | Push: Cell-Level Test | `35957008-e885-815e-8e73-ea79c22f96d4` | https://www.notion.so/35957008e885815e8e73ea79c22f96d4 |
 | 6 | Push: Soft Deleted | `35957008-e885-81e0-83c1-ff9fb4dbfda5` | https://www.notion.so/35957008e88581e083c1ff9fb4dbfda5 |
 | 7 | Push: Null Edges | `35957008-e885-814f-9f19-c401d454b08d` | https://www.notion.so/35957008e885814f9f19c401d454b08d |
+| 8 | Push: Rich-Text Roundtrip | `38a57008-e885-81c3-88c4-eec03393dcad` | https://www.notion.so/38a57008e88581c388c4eec03393dcad |
 
-Relations wired: Page 1 → Page 4, Page 5 → Page 4 (both `Related` arrays contain Page 4's URL).
+Relations wired: Page 1 → Page 4, Page 5 → Page 4 (both `Related` arrays contain Page 4's URL). Page 8 has no relation (clean round-trip workhorse).
 
 ## Why a separate DB
 
@@ -40,9 +41,10 @@ This DB is sized to cover all four phases of the v1.4.0 push redesign without re
 | 1: Confirmation gate | n12b → n13a | Page 1 (Canary) | No — covered today |
 | 2: Validation halts | n21 → n22b | Pages 2, 3, 6, 7 | No |
 | 3: Cell-level diff | n31 → n37 | Pages 4 (formatting), 5 (cell-level), 7 (nulls) | No |
+| 3d: Rich-text un-skip | n31 rich_text re-include (#95/#99) | Pages 5 (workhorse), 8 (full supported round-trip) | **Yes — Page 8** |
 | 4: Run summary JSON | n41 | All pages — exercises every status enum | No |
 
-Total: **7 pages**, 1 schema, 1 self-relation.
+Total: **8 pages**, 1 schema, 1 self-relation. (Page 8 added for Phase 3d — live `highlight`/`==` coverage that Page 4 lacks.)
 
 ---
 
@@ -233,6 +235,46 @@ Phone:         (null)
 
 **Body:** single paragraph: `Phase 2/3 null-edges fixture.`
 
+### Page 8 — "Push: Rich-Text Roundtrip" — phase 3d rich-text un-skip
+
+**Purpose:** The positive counterpart to Page 4. Page 4 proves un-edited rich text *survives* a scalar push (read-only fixture); Page 8 proves edited rich text *round-trips through* a push with formatting intact. Carries the **6 push-supported** inline formats only — bold / italic / inline code / link / strikethrough / **highlight** — and deliberately **no equation** (Page 4 owns the equation-degradation case). Gives the live `highlight` (`==` / `yellow_background`) coverage Page 4 lacks.
+
+Created via Notion MCP `create-pages` using **Notion-flavored Markdown** (note: the MCP dialect differs from notion-sync's `.md` dialect — see the dialect note below):
+
+```
+Name:          Push: Rich-Text Roundtrip   (plain — formatting lives in Description)
+Description (MCP markdown source):
+    **Bold run.** *Italic run.* `inline code` [link to xkcd](https://xkcd.com) ~~struck~~ <span color="yellow_bg">highlighted</span>
+Score:         800
+Category:      Research
+Tags:          [alpha]
+Due Date:      2026-12-01
+Approved:      true
+Website:       https://example.com/roundtrip
+Contact Email: roundtrip@example.com
+Phone:         +1-555-0008
+```
+
+**Annotations stored on Notion (verified via fetch 2026-06-25):** bold on `Bold run.`, italic on `Italic run.`, inline code on `inline code`, link on `link to xkcd` → `https://xkcd.com`, strikethrough on `struck`, **`yellow_background` on `highlighted`**.
+
+**Body:** single paragraph: `Phase 3d rich-text round-trip fixture. Description carries the 6 push-supported formats (bold / italic / code / link / strikethrough / highlight). Do not edit body — push never touches block content.`
+
+**🚨 The highlight MUST be `yellow_bg` (yellow_background), not any other background color.** notion-sync's importer maps **any** `*_background` color → `==text==` (`richtext.go:90`), but `ParseRichText` always emits `yellow_background` on push (`richtext_parser.go` — highlight has no color identity). So a non-yellow background would import as `==` and re-push as **yellow**, drifting the color on round-trip and failing R2's byte-identical annotation check. Non-yellow background collapse is a documented push limitation (Gap-1 family, alongside color / `@user` / equation).
+
+**Dialect note (load-bearing for whoever recreates this page).** Two different inline-markdown dialects touch Page 8:
+- **MCP create dialect** (used above to *create* the page): highlight = `<span color="yellow_bg">…</span>`, underline = `<span underline="true">…</span>`, equation = `` $`…`$ ``.
+- **notion-sync `.md` dialect** (what `import` *writes locally* and what `push` *parses*): highlight = `==…==`, underline = `<u>…</u>`, link/bold/italic/code/strike identical.
+
+Both resolve to the same Notion annotations, so the create-via-MCP page imports into notion-sync's dialect cleanly. The canonical local `Description` after a notion-sync `import` (the value R2/F1 compare against) is:
+
+```
+**Bold run.** *Italic run.* `inline code` [link to xkcd](https://xkcd.com) ~~struck~~ ==highlighted==
+```
+
+(Pin the exact string from a real `import` during the first `/test-push` run — Notion may re-segment; the fetch is the source of truth, this is the expected shape.)
+
+**Convention:** the `R` step group snapshots Page 8's structured `Description` payload via `notion-fetch` before/after a push and asserts byte-identical annotation runs — the rich-text analog of Page 4's phase-3 check, but proving round-trip *through* a push rather than survival *beside* one.
+
 ---
 
 ## Step 4: Wire up relations
@@ -250,29 +292,30 @@ Phase 3 will use this to verify that pushing an unrelated field on Page 5 does N
 
 | Property Type | Populated | Null/Empty | Notes |
 |---|---|---|---|
-| title | All 7 | – | Page 4 has rich-text formatting in title |
-| rich_text | 7 of 7 | – | Page 4 has heavy formatting; others plain |
-| number | 6 of 7 | Page 7 null | |
-| select | 6 of 7 | Page 7 null | All 4 options used at least once |
-| multi_select | 6 of 7 | Page 7 empty `[]` | All 4 options used |
-| date | 6 of 7 | Page 7 null | |
-| checkbox | All 7 | – | true and false both represented |
-| url | 6 of 7 | Page 7 null | |
-| email | 6 of 7 | Page 7 null | |
-| phone_number | 6 of 7 | Page 7 null | |
-| relation | 2 of 7 | 5 empty | Page 1 → 4; Page 5 → 4 |
+| title | All 8 | – | Page 4 has rich-text formatting in title; Page 8's title is plain |
+| rich_text | 8 of 8 | – | Page 4 heavy (incl. equation, degrades on push); Page 8 the 6 push-supported formats; others plain |
+| number | 7 of 8 | Page 7 null | |
+| select | 7 of 8 | Page 7 null | All 4 options used at least once |
+| multi_select | 7 of 8 | Page 7 empty `[]` | All 4 options used |
+| date | 7 of 8 | Page 7 null | |
+| checkbox | All 8 | – | true and false both represented |
+| url | 7 of 8 | Page 7 null | |
+| email | 7 of 8 | Page 7 null | |
+| phone_number | 7 of 8 | Page 7 null | |
+| relation | 2 of 8 | 6 empty | Page 1 → 4; Page 5 → 4 |
 
 ## Per-phase fixture map
 
-| Fixture | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|---|:---:|:---:|:---:|:---:|
-| Page 1 — Canary | ✅ primary | – | – | ✅ pushed/no-op |
-| Page 2 — Conflict A | – | ✅ halt subject | – | ✅ halted |
-| Page 3 — Conflict B | – | ✅ halt subject | – | ✅ halted |
-| Page 4 — Formatting | – | – | ✅ **untouched fixture** | ✅ skippedNoOp |
-| Page 5 — Cell-Level | – | – | ✅ primary | ✅ pushed |
-| Page 6 — Soft Deleted | – | ✅ skip path | – | ✅ skippedNonRow |
-| Page 7 — Null Edges | – | ✅ partial | ✅ null roundtrip | ✅ pushed/no-op |
+| Fixture | Phase 1 | Phase 2 | Phase 3 | Phase 3d | Phase 4 |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Page 1 — Canary | ✅ primary | – | – | – | ✅ pushed/no-op |
+| Page 2 — Conflict A | – | ✅ halt subject | – | – | ✅ halted |
+| Page 3 — Conflict B | – | ✅ halt subject | – | – | ✅ halted |
+| Page 4 — Formatting | – | – | ✅ **untouched fixture** | ⚠️ C7 scalar-edit only; never `--force` | ✅ skippedNoOp |
+| Page 5 — Cell-Level | – | – | ✅ primary | ✅ round-trip workhorse (R1/R3/R4/R5) | ✅ pushed |
+| Page 6 — Soft Deleted | – | ✅ skip path | – | – | ✅ skippedNonRow |
+| Page 7 — Null Edges | – | ✅ partial | ✅ null roundtrip | – | ✅ pushed/no-op |
+| Page 8 — Rich-Text Roundtrip | – | – | – | ✅ primary (R2/R6) | ✅ pushed/no-op |
 
 ---
 
@@ -285,10 +328,11 @@ Phase 3 will use this to verify that pushing an unrelated field on Page 5 does N
 
 ## Things to NEVER do (regression hazards)
 
-1. **Never edit Page 4 directly.** Its rich-text annotations are the phase-3 fixture. Any test that *intentionally* edits Page 4's title/description must also restore the exact original annotation payload. Non-trivial — better not to touch it.
+1. **Never edit Page 4's `Description` / title rich text locally, and never `--force` a folder containing Page 4.** Page 4's `Description` holds an inline equation (`$E = mc^2$`) that notion-sync's parser does **not** round-trip (#95 scoped equations out) — so re-serializing it on push degrades it to a literal `$…$` run. A `--force` push sends `changedFields=nil` (the whole row), which re-serializes `Description` → corruption. **One deliberate carve-out (post-#99):** a **scalar** edit on Page 4 under a **non-force** push (step C7) is safe — n33 sends only the changed scalar, leaving `Description` untouched — and C7 asserts exactly that survival. Everywhere else Page 4 stays read-only. (Pre-#99 the reason was "all rich_text corrupts"; #99's un-skip narrowed it to "equation/color/`@user` still degrade.")
 2. **Never invent new `select` or `multi_select` options.** Notion auto-creates them on push and never garbage-collects. Stick to the 4+4 options spec'd above.
-3. **Never push with `--force` against this DB unless the test specifically requires it.** Force masks conflict bugs; phase 2 needs to actually trigger conflicts to test halts.
-4. **Don't use any of these pages from `/test-single-datasource-db` or any other skill.** This DB is `/test-push`-only. Add a comment to other skills referencing this constraint if needed.
+3. **Never push with `--force` against this DB unless the test specifically requires it.** Force masks conflict bugs (phase 2 needs real conflicts to test halts) **and** bypasses the per-cell diff, re-serializing every row's rich text — which corrupts Page 4's equation and collapses any non-yellow background. When a step does need `--force`, isolate the folder to a page whose rich text is safe to re-serialize (Page 8's 6 supported formats, or a plain-rich_text page) — **never Page 4**.
+4. **Never edit Page 8's `Description` except through the `R` round-trip steps**, and keep its highlight `yellow_bg` (see the Page 8 fixture note — any other background collapses to yellow on push). Page 8 reverts cleanly because its formats are all push-supported; restore it via the step's revert or a re-import.
+5. **Don't use any of these pages from `/test-single-datasource-db` or any other skill.** This DB is `/test-push`-only. Add a comment to other skills referencing this constraint if needed.
 
 ---
 
