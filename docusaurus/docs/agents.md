@@ -33,4 +33,6 @@ If the two disagree, `AGENTS.md` describes the binary that actually wrote the fi
 
 **Never silence a guardrail to make a push succeed.** `--force`, `--allow-new-options`, and a reflexive `--yes` all suppress protections for the user's data — use them only on explicit, per-run human instruction. Treat `cancelled` as "ask the human", not "retry with `--yes`". On any `halted`, `partial`, or `cancelled` outcome, report the entry's `reason` and `fix` and stop.
 
+The same rules cover **creating rows** (`notion-create: true`). A `create-pending` halt is never yours to clear: don't flip `pending` back to `true` — hand it to the human (see [Duplicate guard](guides/push.md#duplicate-guard)).
+
 Mechanics, flags, and the JSON run summary: [Push](guides/push.md).

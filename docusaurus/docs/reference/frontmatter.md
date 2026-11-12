@@ -37,6 +37,7 @@ PDF:
 | `notion-database-id` | Parent database (database entries only) |
 | `notion-deleted` | `true` once the entry is removed in Notion |
 | `notion-last-pushed` | When `push` last wrote this row's properties |
+| `notion-create` | Hand-written on a new file: `true` asks `push` to create the row; `pending` means a create is in flight or failed — see [Creating new rows](../guides/push.md#creating-new-rows) |
 
 ## Property mapping
 

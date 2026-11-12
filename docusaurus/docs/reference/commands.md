@@ -48,7 +48,7 @@ Semantics:
 
 ## push
 
-Write local frontmatter property changes back to Notion. Properties only — page body is never touched. Guarded by a confirmation gate and an all-or-nothing validation gate.
+Write local frontmatter property changes back to Notion, and create new rows from files marked `notion-create: true`. Properties only — page body is never touched. Guarded by a confirmation gate and an all-or-nothing validation gate.
 
 | Flag | Meaning |
 | --- | --- |
