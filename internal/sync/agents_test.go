@@ -380,3 +380,60 @@ func TestAgentsMD_DocumentsCreatingRows(t *testing.T) {
 		}
 	}
 }
+
+// Issue #123: AGENTS.md is a slim pointer, so its links must resolve to the docs
+// cut for the binary that wrote the workspace. Release builds carry a bare
+// semver from -ldflags; the site publishes under /vX.Y.Z/. Dev builds have no
+// cut and fall back to /next/.
+func TestAgentsMD_DocsURLMatchesBinaryVersion(t *testing.T) {
+	cases := []struct{ version, want string }{
+		{"2.1.0", "https://drexel-uhc.github.io/notion-sync/v2.1.0/"},
+		{"v2.1.0", "https://drexel-uhc.github.io/notion-sync/v2.1.0/"},
+		{"dev", "https://drexel-uhc.github.io/notion-sync/next/"},
+		{"", "https://drexel-uhc.github.io/notion-sync/next/"},
+	}
+	orig := Version
+	t.Cleanup(func() { Version = orig })
+	for _, c := range cases {
+		Version = c.version
+		if got := docsURL(); got != c.want {
+			t.Errorf("docsURL() with Version=%q = %q, want %q", c.version, got, c.want)
+		}
+		content := renderAgentsMD()
+		if strings.Contains(content, "{{DOCS_URL}}") {
+			t.Errorf("renderAgentsMD left a {{DOCS_URL}} placeholder (Version=%q)", c.version)
+		}
+		if !strings.Contains(content, c.want+"llms.txt") {
+			t.Errorf("AGENTS.md (Version=%q) missing llms.txt link under %s", c.version, c.want)
+		}
+	}
+	if !strings.Contains(agentsMDTemplate, "{{DOCS_URL}}") {
+		t.Fatalf("embedded template lost the {{DOCS_URL}} placeholder")
+	}
+}
+
+// Issue #123: the slim template must keep every push guardrail inline — the
+// agent reading it may be offline and unable to follow a link.
+func TestAgentsMD_KeepsPushGuardrailsInline(t *testing.T) {
+	content := renderAgentsMD()
+	for _, want := range []string{
+		"default to NOT pushing",
+		"Explicit human authorization",
+		"Workspace in sync",
+		"Reviewed dry run",
+		"Validation gate clean",
+		"Human consent to the write",
+		"Never silence a guardrail",
+		"all-or-nothing",
+		"`conflict`", "`stray`", "`create-pending`", "`invalid-option`", "`malformed`",
+		"report each entry's `reason` and `fix` to the human and stop",
+		"Treat \"cancelled\" as \"ask the human,\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("AGENTS.md missing inline push guardrail: %q", want)
+		}
+	}
+	if n := strings.Count(content, "\n"); n > 110 {
+		t.Errorf("AGENTS.md is %d lines; the slim template should stay around 100", n)
+	}
+}

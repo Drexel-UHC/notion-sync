@@ -48,14 +48,38 @@ If validation fails, tell the user and re-ask.
 
 If the user aborts, stop immediately.
 
-## Step 4: Tag and push
+## Step 4: Cut the docs version
+
+The docs site is versioned per release: `docusaurus/docs/` publishes as `/next/`, each cut
+publishes as `/<version>/`. The binary's generated `AGENTS.md` links to `/<version>/`, so a
+release without a cut ships dead links. Cut it **before** tagging so the tag's commit
+carries the snapshot.
+
+1. `cd docusaurus && pnpm install --frozen-lockfile && pnpm docusaurus docs:version <version>`
+   — writes `versioned_docs/version-<version>/`, `versioned_sidebars/version-<version>-sidebars.json`,
+   and prepends `<version>` to `versions.json`.
+2. In the new `versioned_docs/version-<version>/` copy, replace every `/notion-sync/next/`
+   link (the `llms.txt` / `llms-full.txt` pointers on the agents page) with
+   `/notion-sync/<version>/`.
+3. `pnpm build` — must succeed; stop on any broken-link error.
+4. Show the user the diff (`git status`, the `versions.json` change), then use
+   AskUserQuestion to confirm:
+   - **Yes, commit the docs cut** — proceed
+   - **No, abort** — stop; leave the working tree for the user to inspect
+5. Commit on `main`: `git add docusaurus && git commit -m "docs: cut docs version <version>"`
+   and `git push origin main`. This is the one sanctioned direct commit to `main` — it is
+   part of the release, not a feature.
+
+If any command fails, stop and report the error. Do not tag.
+
+## Step 5: Tag and push
 
 1. Create an annotated tag: `git tag -a <version> -m "Release <version>"`
 2. Push the tag: `git push origin <version>`
 
 If either command fails, stop and report the error.
 
-## Step 5: Report next steps
+## Step 6: Report next steps
 
 Tell the user:
 
