@@ -1,0 +1,97 @@
+# The user docs site: docusaurus/ → GitHub Pages (the gh-pages branch).
+#
+# One job, main only: docs-deploy — a push to main, or a manual run on main → build and push
+# build/ to gh-pages. No pull_request trigger: PRs check the site with `pnpm build` locally.
+#
+# The job is scoped to docusaurus/ (and this file) by a paths-filter step: a push that touches
+# neither passes without building or publishing.
+#
+# Versions: `docs/` publishes as `/next/`; each cut version (`pnpm docusaurus docs:version
+# vX.Y.Z`) is its own permanent folder; the root redirects to the newest.
+#
+# The deploy replaces the gh-pages branch each time (force_orphan). One-time repo setting:
+# Settings → Pages → Source: "Deploy from a branch", branch gh-pages, folder / (root).
+
+name: Docusaurus-site
+
+on:
+  push:
+    branches: main
+  workflow_dispatch:
+
+concurrency:
+  group: docusaurus-site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docs-deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # On push, paths-filter compares against the previous commit on main. A manual run
+      # always deploys — from main only; the job guard skips any other branch.
+      - name: Detect docusaurus/ changes
+        id: changes
+        if: github.event_name == 'push'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            docs:
+              - 'docusaurus/**'
+              - '.github/workflows/docusaurus-site.yml'
+
+      - name: Set up pnpm
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: docusaurus/package.json
+
+      - name: Set up Node
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: docusaurus/pnpm-lock.yaml
+
+      - name: Install
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        working-directory: docusaurus
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        working-directory: docusaurus
+        run: pnpm build
+
+      - name: Publish to gh-pages
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docusaurus/build
+          force_orphan: true
+
+      - name: Smoke-test the live site
+        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
+        run: |
+          site="https://drexel-uhc.github.io/notion-sync"
+          # Newest version, or `next` until the first one is cut.
+          version="$(node -p "JSON.parse(require('fs').readFileSync('docusaurus/versions.json','utf8'))[0] || 'next'")"
+          # Pages rebuilds from the branch in the background; give it up to ~3 minutes.
+          for i in $(seq 1 18); do
+            if curl -sSfo /dev/null "$site/$version/"; then break; fi
+            sleep 10
+          done
+          for path in "/$version/" "/$version/llms.txt" "/"; do
+            code="$(curl -sSo /dev/null -w '%{http_code}' "$site$path")"
+            echo "$site$path → $code"
+            case "$code" in 200) ;; *) exit 1 ;; esac
+          done
+          curl -sSf "$site/" | grep -q "refresh.*$site/$version/" || { echo "root does not redirect to $version"; exit 1; }

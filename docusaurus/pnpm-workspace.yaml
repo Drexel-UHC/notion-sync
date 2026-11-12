@@ -1,0 +1,10 @@
+# Supply-chain guard: don't install versions published less than a day ago.
+minimumReleaseAge: 1440
+
+# Skip pnpm's pre-run dependency check banner before every `pnpm <script>`.
+verifyDepsBeforeRun: false
+
+# Build scripts Docusaurus needs (per the Docusaurus 3.10 release notes).
+allowBuilds:
+  '@swc/core': true
+  core-js: true
