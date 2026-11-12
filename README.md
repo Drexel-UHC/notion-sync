@@ -1,4 +1,4 @@
-# notion-sync
+# notion-sync <img src="docusaurus/static/img/logo.svg" align="right" height="139" alt="notion-sync logo" />
 
 CLI tool to sync Notion databases to local Markdown files with YAML frontmatter.
 
