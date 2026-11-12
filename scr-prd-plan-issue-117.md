@@ -73,7 +73,7 @@ none
 7. **(Move 4)** `cmd/notion-sync/main.go` `runPush`: preview prints a "will CREATE N new rows" block from `preview.Creates` after the update queue; dry-run and real-run human summaries print `Created: N`; the confirmation prompt's count includes creates.
 8. **(Move 5)** `internal/sync/push_test.go`: table tests — (a) marker file → created, write-back keys present, marker removed, mock saw one POST with title + pushable props; (b) stray without marker still `ClassHaltUnexpected`; (c) `pending` file halts the run before any write; (d) POST error leaves `pending` stamp, run continues, summary `failed` names it; (e) write-back error (inject via read-only file or a test hook) leaves `pending`; (f) dry-run creates nothing, no stamp; (g) marker + `notion-id` halts; (h) missing title property → per-row failure; (i) unknown select value on a create → `ClassHaltInvalidOption`; (j) `BuildPushQueue` lists the create and the pending halt. `summary_test.go`: `created` array shape and `[]` when empty.
 9. **(Move 5)** `.claude/skills/test-push/SKILL.md`: add Phase 5 — "Create rows": write `new-row.md` with `notion-create: true` and the fixture's title/select props; `push --dry-run` shows it under created with no Notion write; `push --yes` creates it; assert file now has `notion-id`/`notion-url`/`notion-last-edited`/`notion-database-id`/`notion-last-pushed` and no `notion-create`; `refresh` renames it to `{id}.md`; cleanup archives the created page via the API so the fixture DB stays re-runnable (follow the skill's existing state-invariants section).
-10. **(Move 5)** `internal/sync/agents.md.tmpl`: "Creating rows" subsection (marker, pending halt + fix, properties-only/no body, post-create keys, rename on refresh, `created` in the run-summary JSON). Bump the template's version stamp so `syncAgentsMD` force-upgrades downstream copies. `internal/sync/agents_test.go`: assert the new section is present.
+10. **(Move 5)** `internal/sync/agents.md.tmpl`: "Creating rows" subsection (marker, pending halt + fix, properties-only/no body, post-create keys, rename on refresh, `created` in the run-summary JSON). No manual version bump — the stamp is the binary's `Version`, interpolated at render. `internal/sync/agents_test.go`: assert the new section is present.
 11. `go build ./cmd/notion-sync && go test ./...` green; delete this plan file in the shipping PR.
 
 ## Success spec
@@ -89,7 +89,7 @@ none
 | Unknown select value on a create halts with `ClassHaltInvalidOption` | `go test ./internal/sync/ -run TestPush.*Create.*Option` | agent |
 | Whole suite green | `go test ./...` | agent |
 | Real Notion: `push --yes` on a marker file creates the row; preview and summary show it; `refresh` renames to `{id}.md` | `/test-push` Phase 5 | human-pre-merge |
-| Downstream AGENTS.md documents the marker and the pending recovery after a `refresh` | open `./notion/AGENTS.md` after refresh on any synced folder | human-pre-merge |
+| Downstream AGENTS.md documents the marker and the pending recovery after a `refresh` | build with `-ldflags "-X main.version=<new>"` (dev build skips AGENTS.md), refresh any synced folder, open `./notion/AGENTS.md` | human-pre-merge |
 | OBT loader (salurbal-obt#58) can add a dataset-version row end to end with notion-sync alone | run the loader against the DMC Opt-in DB on the released binary | human-post-merge |
 
 ## Out of scope
