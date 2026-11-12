@@ -235,6 +235,26 @@ func (c *Client) UpdatePage(pageID string, properties map[string]interface{}) (*
 	return &page, nil
 }
 
+// CreatePage creates a database row via POST /pages (issue #117). The parent is
+// the data source when dataSourceID is set (multi-data-source API); legacy
+// metadata without one falls back to the database parent.
+func (c *Client) CreatePage(dataSourceID, databaseID string, properties map[string]interface{}) (*Page, error) {
+	parent := map[string]interface{}{"type": "data_source_id", "data_source_id": dataSourceID}
+	if dataSourceID == "" {
+		parent = map[string]interface{}{"type": "database_id", "database_id": databaseID}
+	}
+	body := map[string]interface{}{"parent": parent, "properties": properties}
+	respBody, err := c.request("POST", "/pages", body)
+	if err != nil {
+		return nil, err
+	}
+	var page Page
+	if err := json.Unmarshal(respBody, &page); err != nil {
+		return nil, fmt.Errorf("unmarshal page: %w", err)
+	}
+	return &page, nil
+}
+
 // GetPage retrieves a page by ID.
 func (c *Client) GetPage(pageID string) (*Page, error) {
 	respBody, err := c.request("GET", "/pages/"+pageID, nil)

@@ -362,3 +362,21 @@ func TestEmbeddedTemplateHasPlaceholder(t *testing.T) {
 		t.Errorf("renderAgentsMD did not stamp the version, got head:\n%.80s", got)
 	}
 }
+
+// Issue #117: downstream agents must learn the create marker, the pending
+// halt and its recovery, and the `created` summary array from AGENTS.md.
+func TestAgentsMD_DocumentsCreatingRows(t *testing.T) {
+	content := renderAgentsMD()
+	for _, want := range []string{
+		"### Creating new rows",
+		"notion-create: true",
+		"notion-create: pending",
+		"create-pending",
+		`"created"`,
+		"properties only",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("AGENTS.md missing create-rows note: %q", want)
+		}
+	}
+}

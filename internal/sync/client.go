@@ -10,6 +10,7 @@ type NotionClient interface {
 	QueryAllEntries(dataSourceID string) ([]notion.Page, error)
 	GetPage(pageID string) (*notion.Page, error)
 	UpdatePage(pageID string, properties map[string]interface{}) (*notion.Page, error)
+	CreatePage(dataSourceID, databaseID string, properties map[string]interface{}) (*notion.Page, error)
 	FetchAllBlocks(blockID string) ([]notion.Block, error)
 	FetchBlockTree(pageID string, progress func(fetched, found int)) (*notion.BlockTree, error)
 }

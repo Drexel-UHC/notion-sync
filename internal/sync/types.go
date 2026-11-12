@@ -83,7 +83,10 @@ type PushOptions struct {
 // Notion API call (stray .md, malformed YAML). Network-dependent halts
 // (conflicts, unreachable) only surface later at the validation gate.
 type PushPreview struct {
-	Queue      []string
+	Queue []string
+	// Creates are the `notion-create: true` files the push would turn into
+	// new rows (issue #117), listed separately so the gate shows them apart.
+	Creates    []string
 	LocalHalts []FileClassification
 }
 
@@ -97,7 +100,11 @@ type PushResult struct {
 	// SkippedNoOp counts rows whose local frontmatter already matched Notion's
 	// stored values (DAG n32a) — nothing to push, no UpdatePage call made.
 	// Distinct from Skipped, which counts rows with no pushable fields at all.
-	SkippedNoOp   int
+	SkippedNoOp int
+	// Created counts new rows made from `notion-create: true` files (issue
+	// #117); CreatedRows carries one entry per create for the summary.
+	Created       int
+	CreatedRows   []PushedEntry
 	Conflicts     int
 	Failed        int
 	Errors        []string

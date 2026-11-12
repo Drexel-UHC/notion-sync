@@ -237,3 +237,42 @@ func TestRunSummary_n41_EmptyArraysSerializeAsBracketsNotNull(t *testing.T) {
 		}
 	}
 }
+
+// Issue #117: new rows land in their own `created` array, same PushedEntry
+// shape as `pushed`, and a run whose only writes are creates is still clean.
+func TestRunSummary_117_CreatedRowsPopulated(t *testing.T) {
+	result := &PushResult{
+		CreatedRows: []PushedEntry{{File: "new.md", Fields: []string{"Name", "Status"}}},
+	}
+	s := result.Summary()
+	if s.Status != "clean" {
+		t.Errorf("status = %q, want clean", s.Status)
+	}
+	if len(s.Created) != 1 || s.Created[0].File != "new.md" {
+		t.Fatalf("created = %+v, want one entry for new.md", s.Created)
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"created":[{"file":"new.md"`) {
+		t.Errorf("expected created entry in JSON, got %s", b)
+	}
+}
+
+func TestRunSummary_117_CreatedEmptyIsBracketsOnEveryPath(t *testing.T) {
+	for name, r := range map[string]*PushResult{
+		"clean":     {},
+		"cancelled": {Cancelled: true},
+		"halted":    {Halts: []FileClassification{{Path: "x.md", Class: ClassHaltCreatePending}}},
+		"auth":      {AuthHalted: true, AuthError: "auth — fix"},
+	} {
+		b, err := json.Marshal(r.Summary())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"created":[]`) {
+			t.Errorf("%s: expected \"created\":[] in %s", name, b)
+		}
+	}
+}

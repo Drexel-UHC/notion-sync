@@ -25,6 +25,8 @@ const (
 	ClassHaltMalformed                           // n21g — YAML frontmatter could not be parsed
 	ClassHaltUnreadable                          // n21h — file could not be read from disk
 	ClassHaltInvalidOption                       // n21i — select/status/multi_select value not in schema options
+	ClassReadyCreate                             // #117 — `notion-create: true`, no notion-id: queued as a new row
+	ClassHaltCreatePending                       // #117 — `notion-create: pending`: a previous create may have reached Notion
 )
 
 // IsHalt returns true for any halt-class value.
@@ -34,7 +36,8 @@ func (c Classification) IsHalt() bool {
 		c == ClassHaltUnreachable ||
 		c == ClassHaltMalformed ||
 		c == ClassHaltUnreadable ||
-		c == ClassHaltInvalidOption
+		c == ClassHaltInvalidOption ||
+		c == ClassHaltCreatePending
 }
 
 // isLocalHalt reports whether a halt class is detectable from disk alone,
@@ -45,7 +48,8 @@ func (c Classification) IsHalt() bool {
 func (c Classification) isLocalHalt() bool {
 	return c == ClassHaltUnexpected ||
 		c == ClassHaltMalformed ||
-		c == ClassHaltUnreadable
+		c == ClassHaltUnreadable ||
+		c == ClassHaltCreatePending
 }
 
 // FileClassification is one file's row in the validation report.
@@ -206,7 +210,52 @@ func classifyFolder(folderPath string, client NotionClient, schema map[string]no
 		}
 
 		notionID, hasID := fm["notion-id"].(string)
-		if !hasID || notionID == "" {
+		hasID = hasID && notionID != ""
+
+		// Create marker (issue #117). Opt-in lives with the file: only
+		// `notion-create: true` makes an unlinked file a new row; `pending`
+		// means a previous push stamped it before POST /pages and never
+		// confirmed the write-back, so the row may already exist in Notion.
+		switch createMarker(fm) {
+		case createMarkerPending:
+			add(FileClassification{
+				Path:   fullPath,
+				Class:  ClassHaltCreatePending,
+				fm:     fm,
+				Reason: "a previous push may have created this row in Notion (notion-create: pending) — re-pushing could duplicate it",
+			})
+			continue
+		case createMarkerTrue:
+			if hasID {
+				add(FileClassification{
+					Path:     fullPath,
+					Class:    ClassHaltMalformed,
+					NotionID: notionID,
+					fm:       fm,
+					Reason:   "notion-create: true on a file that already has a notion-id — remove one of them",
+				})
+				continue
+			}
+			if schema != nil {
+				if reason, ok := validateRowOptions(fm, schema, allowNewOptions); !ok {
+					add(FileClassification{
+						Path:   fullPath,
+						Class:  ClassHaltInvalidOption,
+						fm:     fm,
+						Reason: reason,
+					})
+					continue
+				}
+			}
+			add(FileClassification{
+				Path:  fullPath,
+				Class: ClassReadyCreate,
+				fm:    fm,
+			})
+			continue
+		}
+
+		if !hasID {
 			add(FileClassification{
 				Path:   fullPath,
 				Class:  ClassHaltUnexpected,
@@ -284,6 +333,34 @@ func classifyFolder(folderPath string, client NotionClient, schema map[string]no
 		})
 	}
 	return report, nil
+}
+
+type createMarkerState int
+
+const (
+	createMarkerNone createMarkerState = iota
+	createMarkerTrue
+	createMarkerPending
+)
+
+// createMarker reads the `notion-create` frontmatter key (issue #117). YAML
+// parses a bare `true` as a bool; a quoted "true" is accepted too. Any other
+// value is treated as absent, so the file falls through to the normal checks.
+func createMarker(fm map[string]interface{}) createMarkerState {
+	switch v := fm["notion-create"].(type) {
+	case bool:
+		if v {
+			return createMarkerTrue
+		}
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true":
+			return createMarkerTrue
+		case "pending":
+			return createMarkerPending
+		}
+	}
+	return createMarkerNone
 }
 
 // validateRowOptions checks every select / status / multi_select value in a

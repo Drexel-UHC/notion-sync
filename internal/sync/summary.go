@@ -13,6 +13,7 @@ import (
 type RunSummary struct {
 	Status        string               `json:"status"` // clean | partial | halted | cancelled
 	Pushed        []PushedEntry        `json:"pushed"`
+	Created       []PushedEntry        `json:"created"` // new rows from notion-create: true files (#117)
 	SkippedNoOp   []string             `json:"skippedNoOp"`
 	SkippedNonRow []SkippedNonRowEntry `json:"skippedNonRow"`
 	Failed        []FailedEntry        `json:"failed"`
@@ -58,6 +59,7 @@ func (r *PushResult) Summary() RunSummary {
 	s := RunSummary{
 		Status:        r.status(),
 		Pushed:        append([]PushedEntry{}, r.PushedRows...),
+		Created:       append([]PushedEntry{}, r.CreatedRows...),
 		SkippedNoOp:   append([]string{}, r.SkippedNoOpFiles...),
 		SkippedNonRow: append([]SkippedNonRowEntry{}, r.SkippedNonRow...),
 		Failed:        append([]FailedEntry{}, r.FailedRows...),
@@ -117,6 +119,8 @@ func haltFix(c Classification) string {
 		return "fix the file's permissions, then re-run"
 	case ClassHaltInvalidOption:
 		return "use an existing option (or pass --allow-new-options for select/multi_select), then re-run"
+	case ClassHaltCreatePending:
+		return "run `notion-sync refresh`; if the row arrived as its own {id}.md, delete this file, otherwise set notion-create: true to retry"
 	default:
 		return "fix the issue, then re-run"
 	}
