@@ -37,7 +37,24 @@ Compute the suggested versions dynamically from the current tag. Show the comput
 
 If validation fails, tell the user and re-ask.
 
-## Step 3: Show changelog and confirm
+## Step 3: Docs version check
+
+The binary's generated `AGENTS.md` links to `/<version>/` on the docs site, so a release
+with no matching docs version ships dead links. This skill never cuts the docs itself — it
+only checks.
+
+1. Read `docusaurus/versions.json` and check that it lists `<version>` (e.g. `v2.2.0`).
+2. **Listed** → print `Step 3: Docs version — PASS` and continue.
+3. **Missing** → stop the release. Tell the user to cut the docs version in its own PR, merge
+   it, then re-run `/release`:
+   - `cd docusaurus && pnpm docusaurus docs:version <version>`
+   - in `versioned_docs/version-<version>/`, replace every `/notion-sync/next/` link with
+     `/notion-sync/<version>/`
+   - `pnpm build` must pass
+
+Do NOT cut the docs, commit, or tag in this step.
+
+## Step 4: Show changelog and confirm
 
 1. Run `git log <current-tag>..HEAD --oneline` to get all commits since the last release.
 2. Display the changelog to the user formatted as a bullet list.
@@ -48,14 +65,14 @@ If validation fails, tell the user and re-ask.
 
 If the user aborts, stop immediately.
 
-## Step 4: Tag and push
+## Step 5: Tag and push
 
 1. Create an annotated tag: `git tag -a <version> -m "Release <version>"`
 2. Push the tag: `git push origin <version>`
 
 If either command fails, stop and report the error.
 
-## Step 5: Report next steps
+## Step 6: Report next steps
 
 Tell the user:
 

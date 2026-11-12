@@ -35,11 +35,31 @@ func ParseAgentsMDVersion(content string) string {
 //go:embed agents.md.tmpl
 var agentsMDTemplate string
 
+// docsSiteBase is the root of the published user docs (Docusaurus, GitHub
+// Pages). Each release is published under /vX.Y.Z/ and the unreleased working
+// copy under /next/; every version carries its own llms.txt.
+const docsSiteBase = "https://drexel-uhc.github.io/notion-sync/"
+
+// docsURL returns the docs-site root for the running binary, with a trailing
+// slash, so AGENTS.md links point at the docs that match the version that
+// wrote the workspace. Release builds carry a bare semver ("2.1.0") from
+// -ldflags; the site's version paths are "v2.1.0". A dev build ("dev" or
+// empty) has no matching cut, so it falls back to /next/.
+func docsURL() string {
+	v := strings.TrimPrefix(Version, "v")
+	if v == "" || v == "dev" {
+		return docsSiteBase + "next/"
+	}
+	return docsSiteBase + "v" + v + "/"
+}
+
 // renderAgentsMD returns the AGENTS.md content with the current binary's
-// Version interpolated into the version stamp. If Version is unset (e.g. in
-// tests that don't wire it), the stamp value is empty.
+// Version interpolated into the version stamp and the matching docs-site URL
+// into every {{DOCS_URL}} link. If Version is unset (e.g. in tests that don't
+// wire it), the stamp value is empty and links fall back to /next/.
 func renderAgentsMD() string {
-	return strings.Replace(agentsMDTemplate, "{{VERSION}}", Version, 1)
+	out := strings.Replace(agentsMDTemplate, "{{VERSION}}", Version, 1)
+	return strings.ReplaceAll(out, "{{DOCS_URL}}", docsURL())
 }
 
 // EnsureAgentsMDCurrent keeps the workspace-root AGENTS.md in lock-step with the
