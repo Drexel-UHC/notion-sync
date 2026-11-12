@@ -1021,7 +1021,9 @@ var finalizeCreateFn = finalizeCreate
 
 // finalizeCreate is phase two of the guard: drop the `notion-create` line and
 // link the file to its new row, with the notion-* keys at the top in the order
-// FreezePage writes them.
+// FreezePage writes them. Every pre-existing notion-* line is dropped first —
+// a file copied from another row still carries that row's keys, and keeping
+// them would duplicate YAML keys and leave the file unparseable.
 func finalizeCreate(filePath, notionID, notionURL, lastEdited, databaseID, pushedAt string) error {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
@@ -1031,11 +1033,17 @@ func finalizeCreate(filePath, notionID, notionURL, lastEdited, databaseID, pushe
 	if !strings.HasPrefix(s, "---\n") {
 		return fmt.Errorf("no frontmatter")
 	}
-	if start, end, ok := frontmatterLine(s, "notion-create:"); ok {
-		if end < len(s) {
-			end++ // take the line's newline with it
+	for key := range pushNotionKeys {
+		for {
+			start, end, ok := frontmatterLine(s, key+":")
+			if !ok {
+				break
+			}
+			if end < len(s) {
+				end++ // take the line's newline with it
+			}
+			s = s[:start] + s[end:]
 		}
-		s = s[:start] + s[end:]
 	}
 	keys := []string{"notion-id", "notion-url", "notion-last-edited", "notion-database-id", "notion-last-pushed"}
 	header := frontmatter.BuildOrdered(map[string]interface{}{
@@ -1062,15 +1070,12 @@ func frontmatterLine(s, prefix string) (int, int, bool) {
 	if fmEnd == -1 {
 		return 0, 0, false
 	}
+	// block keeps the opening "---\n", so the first frontmatter line also
+	// matches "\n"+prefix.
 	block := s[:4+fmEnd+1]
 	idx := strings.Index(block, "\n"+prefix)
 	if idx == -1 {
-		// The marker may be the very first frontmatter line.
-		if strings.HasPrefix(s[4:], prefix) {
-			idx = 3
-		} else {
-			return 0, 0, false
-		}
+		return 0, 0, false
 	}
 	start := idx + 1
 	end := strings.Index(s[start:], "\n")

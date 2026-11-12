@@ -280,6 +280,49 @@ func TestPushDatabase_CreatePending_WriteBackErrorLeavesStamp(t *testing.T) {
 	}
 }
 
+// (k) A file copied from an existing row keeps that row's notion-* keys; the
+// write-back must replace them, not duplicate them (duplicate YAML keys make
+// the file unparseable and halt every later push as malformed).
+func TestPushDatabase_Create_CopiedRowTemplateLinksCleanly(t *testing.T) {
+	dir, client := setupCreateFolder(t)
+	p := writeMD(t, dir, "copy.md", "---\n"+
+		"notion-url: \"https://www.notion.so/old\"\n"+
+		"notion-last-edited: \"2024-01-01T00:00:00.000Z\"\n"+
+		"notion-database-id: db-001\n"+
+		"notion-last-pushed: \"2024-01-02T00:00:00Z\"\n"+
+		"notion-create: true\n"+
+		"Name: Copy\n"+
+		"---\nbody\n")
+
+	result, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created != 1 {
+		t.Fatalf("expected 1 create, got %d (failed=%+v)", result.Created, result.FailedRows)
+	}
+	got := readMD(t, p)
+	for _, key := range []string{"notion-id:", "notion-url:", "notion-last-edited:", "notion-database-id:", "notion-last-pushed:"} {
+		if n := strings.Count(got, "\n"+key); n != 1 {
+			t.Errorf("expected %s exactly once, got %d in:\n%s", key, n, got)
+		}
+	}
+	if strings.Contains(got, "/old") || strings.Contains(got, "2024-01-01") {
+		t.Errorf("stale values from the copied row survived:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "---\nbody\n") {
+		t.Errorf("body must be preserved, got:\n%s", got)
+	}
+
+	result2, err := PushDatabase(PushOptions{Client: client, FolderPath: dir}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result2.Halted {
+		t.Errorf("second push must not halt, got %+v", result2.Halts)
+	}
+}
+
 // (f) --dry-run reports the create but sends nothing and stamps nothing.
 func TestPushDatabase_DryRun_CreateWritesNothing(t *testing.T) {
 	dir, client := setupCreateFolder(t)
