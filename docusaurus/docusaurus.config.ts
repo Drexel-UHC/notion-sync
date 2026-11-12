@@ -45,6 +45,7 @@ function rootRedirect(): Plugin {
 const config: Config = {
   title: 'notion-sync',
   tagline: 'Sync Notion databases and pages to local Markdown files with YAML frontmatter.',
+  favicon: 'img/logo.svg',
 
   future: {
     v4: true,
