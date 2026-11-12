@@ -1,0 +1,24 @@
+# notion-sync
+
+> Sync Notion databases and pages to local Markdown files with YAML frontmatter.
+> 
+> Version: next
+
+This file contains links to documentation sections following the llmstxt.org standard.
+
+## Table of Contents
+
+- [For agents](https://drexel-uhc.github.io/notion-sync/next/agents.md): *How LLM tools should read, and carefully write, a notion-sync workspace.*
+- [Getting started](https://drexel-uhc.github.io/notion-sync/next/getting-started.md): *Install the CLI, connect it to Notion, run your first import.*
+- [Install](https://drexel-uhc.github.io/notion-sync/next/getting-started/install.md): *Install, update, or download notion-sync.*
+- [Notion setup](https://drexel-uhc.github.io/notion-sync/next/getting-started/notion-setup.md): *Create an integration, share databases with it, and find their IDs.*
+- [Quickstart](https://drexel-uhc.github.io/notion-sync/next/getting-started/quickstart.md): *Import, refresh, list.*
+- [Guides](https://drexel-uhc.github.io/notion-sync/next/guides.md): *Task-oriented walkthroughs.*
+- [Push](https://drexel-uhc.github.io/notion-sync/next/guides/push.md): *Write local property edits — and new rows — back to Notion. Guarded, all-or-nothing.*
+- [Introduction](https://drexel-uhc.github.io/notion-sync/next/docs.md): *Sync Notion databases and pages to local Markdown files with YAML frontmatter.*
+- [Commands](https://drexel-uhc.github.io/notion-sync/next/reference/commands.md): *Every command and flag.*
+- [File URLs](https://drexel-uhc.github.io/notion-sync/next/reference/file-urls.md): *Why S3 links are stripped, and how to fetch the bytes.*
+- [Frontmatter](https://drexel-uhc.github.io/notion-sync/next/reference/frontmatter.md): *Metadata keys and how Notion properties map to YAML.*
+- [Reference](https://drexel-uhc.github.io/notion-sync/next/reference.md): *Commands, on-disk format, and metadata.*
+- [Metadata files](https://drexel-uhc.github.io/notion-sync/next/reference/metadata-files.md): *`_database.json` and `_page.json`.*
+- [Workspace layout](https://drexel-uhc.github.io/notion-sync/next/reference/workspace-layout.md): *What's on disk after an import.*
