@@ -13,7 +13,7 @@ Given a Notion database ID (or a standalone page URL), notion-sync fetches every
 ## Who these docs are for
 
 - **People** using the CLI — start with [Install](getting-started/install.md) and [Quickstart](getting-started/quickstart.md).
-- **Agents** (LLM tools) reading or editing a synced workspace — see [For agents](agents.md). Every page here is also served as plain Markdown, indexed in [`llms.txt`](pathname:///notion-sync/llms.txt).
+- **Agents** (LLM tools) reading or editing a synced workspace — see [For agents](agents.md). Every page here is also served as plain Markdown, indexed in [`llms.txt`](pathname:///notion-sync/next/llms.txt).
 
 ## At a glance
 

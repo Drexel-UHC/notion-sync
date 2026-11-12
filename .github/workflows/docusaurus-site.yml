@@ -6,6 +6,9 @@
 # The job is scoped to docusaurus/ (and this file) by a paths-filter step: a push that touches
 # neither passes without building or publishing.
 #
+# Versions: `docs/` publishes as `/next/`; each cut version (`pnpm docusaurus docs:version
+# vX.Y.Z`) is its own permanent folder; the root redirects to the newest.
+#
 # The deploy replaces the gh-pages branch each time (force_orphan). One-time repo setting:
 # Settings → Pages → Source: "Deploy from a branch", branch gh-pages, folder / (root).
 
@@ -79,13 +82,16 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.docs == 'true'
         run: |
           site="https://drexel-uhc.github.io/notion-sync"
+          # Newest version, or `next` until the first one is cut.
+          version="$(node -p "JSON.parse(require('fs').readFileSync('docusaurus/versions.json','utf8'))[0] || 'next'")"
           # Pages rebuilds from the branch in the background; give it up to ~3 minutes.
           for i in $(seq 1 18); do
-            if curl -sSfo /dev/null "$site/"; then break; fi
+            if curl -sSfo /dev/null "$site/$version/"; then break; fi
             sleep 10
           done
-          for path in "/" "/llms.txt"; do
+          for path in "/$version/" "/$version/llms.txt" "/"; do
             code="$(curl -sSo /dev/null -w '%{http_code}' "$site$path")"
             echo "$site$path → $code"
             case "$code" in 200) ;; *) exit 1 ;; esac
           done
+          curl -sSf "$site/" | grep -q "refresh.*$site/$version/" || { echo "root does not redirect to $version"; exit 1; }
