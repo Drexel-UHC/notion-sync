@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ran-codes/notion-sync/internal/frontmatter"
 	"github.com/ran-codes/notion-sync/internal/markdown"
 	"github.com/ran-codes/notion-sync/internal/notion"
 )
@@ -21,7 +22,7 @@ import (
 func readyQueue(report *ValidationReport) []FileClassification {
 	queue := make([]FileClassification, 0, len(report.Files))
 	for _, f := range report.Files {
-		if f.Class == ClassReady {
+		if f.Class == ClassReady || f.Class == ClassReadyCreate {
 			queue = append(queue, f)
 		}
 	}
@@ -60,6 +61,8 @@ func BuildPushQueue(folderPath string) (*PushPreview, error) {
 		switch {
 		case f.Class == ClassReady:
 			preview.Queue = append(preview.Queue, f.Path)
+		case f.Class == ClassReadyCreate:
+			preview.Creates = append(preview.Creates, f.Path)
 		case f.Class.isLocalHalt():
 			preview.LocalHalts = append(preview.LocalHalts, f)
 		}
@@ -181,6 +184,15 @@ func PushDatabase(opts PushOptions, onProgress ProgressCallback) (*PushResult, e
 	for i, f := range files {
 		if onProgress != nil {
 			onProgress(ProgressPhase{Phase: PhasePushing, Current: i + 1, Total: result.Total, Title: metadata.Title})
+		}
+
+		// New rows (issue #117) take their own path: nothing to diff or
+		// re-fetch, and the duplicate-row guard lives in createRow.
+		if f.Class == ClassReadyCreate {
+			if !createRow(opts, metadata, schema, f, result) {
+				break
+			}
+			continue
 		}
 
 		notionID := f.NotionID
@@ -585,6 +597,7 @@ var pushNotionKeys = map[string]bool{
 	"notion-id": true, "notion-url": true,
 	"notion-last-edited": true, "notion-database-id": true,
 	"notion-deleted": true, "notion-last-pushed": true,
+	"notion-create": true,
 }
 
 var pushSkipTypes = map[string]bool{
@@ -901,4 +914,168 @@ func updateAfterPush(filePath, newLastEdited, pushedAt string) error {
 	}
 
 	return nil
+}
+
+// createRow turns one `notion-create: true` file into a new Notion row (issue
+// #117). Notion has no idempotency key, so a duplicate is prevented by a
+// two-phase local stamp: the marker flips to `pending` before POST /pages and
+// is only removed once the new ID is written back. Any failure after the stamp
+// leaves `pending`, which halts every later run until a human reconciles via
+// `refresh`. Returns false only on a run-wide auth halt.
+func createRow(opts PushOptions, metadata *FrozenDatabase, schema map[string]notion.DatabaseProperty, f FileClassification, result *PushResult) bool {
+	base := filepath.Base(f.Path)
+	fail := func(reason, fix string) {
+		result.Failed++
+		result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", base, reason))
+		result.FailedRows = append(result.FailedRows, FailedEntry{File: base, Reason: reason, Fix: fix})
+	}
+
+	properties, validationErrs := buildPropertyPayloadFor(f.fm, schema, nil)
+	if len(validationErrs) > 0 {
+		fail(strings.Join(validationErrs, "; "), "fix the field value(s) to match the schema, then re-run")
+		return true
+	}
+	// Notion accepts an untitled page, but an untitled row is never what a
+	// create means — require the title before anything touches the file.
+	titleKey := titlePropertyKey(schema)
+	if titleKey == "" || strings.TrimSpace(coerceString(f.fm[titleKey])) == "" {
+		fail("new row has no title", fmt.Sprintf("add `%s:` to the frontmatter, then re-run", titleKey))
+		return true
+	}
+
+	if opts.DryRun {
+		result.Created++
+		result.CreatedRows = append(result.CreatedRows, PushedEntry{File: base, Fields: pushedFields(nil, properties)})
+		return true
+	}
+
+	if err := stampCreatePending(f.Path); err != nil {
+		fail(fmt.Sprintf("could not mark the file pending before creating: %v", err), "fix the file's permissions, then re-run")
+		return true
+	}
+
+	created, err := opts.Client.CreatePage(metadata.DataSourceID, metadata.DatabaseID, properties)
+	if err != nil {
+		// The stamp stays `pending` on every error path: Notion may have
+		// stored the row even though the call failed.
+		if notion.IsAuthError(err) {
+			result.AuthHalted = true
+			result.AuthError = fmt.Sprintf("authentication failed (%v) — check the API key has write access to this database, then re-run", err)
+			return false
+		}
+		fail(fmt.Sprintf("create failed: %v", err), "run `notion-sync refresh`; if the row arrived as its own {id}.md, delete this file, otherwise set notion-create: true to retry")
+		return true
+	}
+
+	// POST /pages echoes a minute-quantized last_edited_time (issue #57);
+	// re-read the precise value so the next push's gate doesn't see a false
+	// conflict on the row we just made.
+	lastEdited := created.LastEditedTime
+	if fresh, err := opts.Client.GetPage(created.ID); err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("%s: refetch precise timestamp: %v", base, err))
+	} else if fresh != nil && fresh.LastEditedTime != "" {
+		lastEdited = fresh.LastEditedTime
+	}
+
+	pushedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := finalizeCreateFn(f.Path, created.ID, notion.CanonicalizeNotionURL(created.URL), lastEdited, metadata.DatabaseID, pushedAt); err != nil {
+		fail(fmt.Sprintf("row %s was created in Notion but the file could not be updated: %v", created.ID, err),
+			"run `notion-sync refresh` to pull the new row, then delete this file")
+		return true
+	}
+
+	result.Created++
+	result.CreatedRows = append(result.CreatedRows, PushedEntry{File: base, Fields: pushedFields(nil, properties)})
+	return true
+}
+
+// titlePropertyKey returns the schema's title property name, or "" if none.
+func titlePropertyKey(schema map[string]notion.DatabaseProperty) string {
+	for key, prop := range schema {
+		if prop.Type == "title" {
+			return key
+		}
+	}
+	return ""
+}
+
+// stampCreatePending rewrites the file's `notion-create:` line to
+// `notion-create: pending` — phase one of the duplicate-row guard.
+func stampCreatePending(filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	s := strings.ReplaceAll(string(content), "\r\n", "\n")
+	start, end, ok := frontmatterLine(s, "notion-create:")
+	if !ok {
+		return fmt.Errorf("notion-create line not found")
+	}
+	s = s[:start] + "notion-create: pending" + s[end:]
+	return os.WriteFile(filePath, []byte(s), 0644)
+}
+
+// finalizeCreateFn is finalizeCreate, swappable so tests can inject a
+// write-back failure after a successful POST.
+var finalizeCreateFn = finalizeCreate
+
+// finalizeCreate is phase two of the guard: drop the `notion-create` line and
+// link the file to its new row, with the notion-* keys at the top in the order
+// FreezePage writes them.
+func finalizeCreate(filePath, notionID, notionURL, lastEdited, databaseID, pushedAt string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	s := strings.ReplaceAll(string(content), "\r\n", "\n")
+	if !strings.HasPrefix(s, "---\n") {
+		return fmt.Errorf("no frontmatter")
+	}
+	if start, end, ok := frontmatterLine(s, "notion-create:"); ok {
+		if end < len(s) {
+			end++ // take the line's newline with it
+		}
+		s = s[:start] + s[end:]
+	}
+	keys := []string{"notion-id", "notion-url", "notion-last-edited", "notion-database-id", "notion-last-pushed"}
+	header := frontmatter.BuildOrdered(map[string]interface{}{
+		"notion-id":          notionID,
+		"notion-url":         notionURL,
+		"notion-last-edited": lastEdited,
+		"notion-database-id": databaseID,
+		"notion-last-pushed": pushedAt,
+	}, keys, "")
+	// BuildOrdered wraps the entries in --- delimiters; keep just the lines.
+	lines := strings.TrimSuffix(strings.TrimPrefix(header, "---\n"), "---\n")
+	s = "---\n" + lines + s[len("---\n"):]
+	return os.WriteFile(filePath, []byte(s), 0644)
+}
+
+// frontmatterLine finds a top-level frontmatter line starting with prefix and
+// returns its [start, end) byte range (end excludes the newline). Only the
+// frontmatter block is searched, so a body line can never match.
+func frontmatterLine(s, prefix string) (int, int, bool) {
+	if !strings.HasPrefix(s, "---\n") {
+		return 0, 0, false
+	}
+	fmEnd := strings.Index(s[4:], "\n---")
+	if fmEnd == -1 {
+		return 0, 0, false
+	}
+	block := s[:4+fmEnd+1]
+	idx := strings.Index(block, "\n"+prefix)
+	if idx == -1 {
+		// The marker may be the very first frontmatter line.
+		if strings.HasPrefix(s[4:], prefix) {
+			idx = 3
+		} else {
+			return 0, 0, false
+		}
+	}
+	start := idx + 1
+	end := strings.Index(s[start:], "\n")
+	if end == -1 {
+		return start, len(s), true
+	}
+	return start, start + end, true
 }
