@@ -37,7 +37,24 @@ Compute the suggested versions dynamically from the current tag. Show the comput
 
 If validation fails, tell the user and re-ask.
 
-## Step 3: Show changelog and confirm
+## Step 3: Docs version check
+
+The binary's generated `AGENTS.md` links to `/<version>/` on the docs site, so a release
+with no matching docs version ships dead links. This skill never cuts the docs itself — it
+only checks.
+
+1. Read `docusaurus/versions.json` and check that it lists `<version>` (e.g. `v2.2.0`).
+2. **Listed** → print `Step 3: Docs version — PASS` and continue.
+3. **Missing** → stop the release. Tell the user to cut the docs version in its own PR, merge
+   it, then re-run `/release`:
+   - `cd docusaurus && pnpm docusaurus docs:version <version>`
+   - in `versioned_docs/version-<version>/`, replace every `/notion-sync/next/` link with
+     `/notion-sync/<version>/`
+   - `pnpm build` must pass
+
+Do NOT cut the docs, commit, or tag in this step.
+
+## Step 4: Show changelog and confirm
 
 1. Run `git log <current-tag>..HEAD --oneline` to get all commits since the last release.
 2. Display the changelog to the user formatted as a bullet list.
@@ -47,30 +64,6 @@ If validation fails, tell the user and re-ask.
    - **No, abort** — stop
 
 If the user aborts, stop immediately.
-
-## Step 4: Cut the docs version
-
-The docs site is versioned per release: `docusaurus/docs/` publishes as `/next/`, each cut
-publishes as `/<version>/`. The binary's generated `AGENTS.md` links to `/<version>/`, so a
-release without a cut ships dead links. Cut it **before** tagging so the tag's commit
-carries the snapshot.
-
-1. `cd docusaurus && pnpm install --frozen-lockfile && pnpm docusaurus docs:version <version>`
-   — writes `versioned_docs/version-<version>/`, `versioned_sidebars/version-<version>-sidebars.json`,
-   and prepends `<version>` to `versions.json`.
-2. In the new `versioned_docs/version-<version>/` copy, replace every `/notion-sync/next/`
-   link (the `llms.txt` / `llms-full.txt` pointers on the agents page) with
-   `/notion-sync/<version>/`.
-3. `pnpm build` — must succeed; stop on any broken-link error.
-4. Show the user the diff (`git status`, the `versions.json` change), then use
-   AskUserQuestion to confirm:
-   - **Yes, commit the docs cut** — proceed
-   - **No, abort** — stop; leave the working tree for the user to inspect
-5. Commit on `main`: `git add docusaurus && git commit -m "docs: cut docs version <version>"`
-   and `git push origin main`. This is the one sanctioned direct commit to `main` — it is
-   part of the release, not a feature.
-
-If any command fails, stop and report the error. Do not tag.
 
 ## Step 5: Tag and push
 

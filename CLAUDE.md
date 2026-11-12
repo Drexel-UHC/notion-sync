@@ -465,7 +465,7 @@ Strategy: one source of truth (the Docusaurus site), two thin pointers (`AGENTS.
 | **Docs** | `docusaurus/docs/**` (published as `next`) | Any PR that changes user-visible behavior: commands, flags, output format, frontmatter keys, metadata files, the push contract | Document new behavior, correct changed behavior, delete removed behavior. **Out of scope:** `docusaurus/versioned_docs/**` and `docusaurus/versioned_sidebars/**` — frozen release snapshots, edited only at a version cut |
 | **AGENTS.md template** | `internal/sync/agents.md.tmpl` | Only when the PR changes something the slim AGENTS.md keeps inline: layout, `notion-*` frontmatter keys, soft deletes, the file-URL gotcha, push guardrails, halt classes, row creation, rich-text fidelity | Update the inline essential; everything else stays a `{{DOCS_URL}}` link to the site. Keep it ≤ ~100 lines; `go test ./internal/sync/` guards the line count, the placeholders, and the guardrail sentences |
 | **Changelog** | none | — | Release notes are GitHub Releases, auto-generated from PR titles |
-| **Version metadata** | none per PR | — | The docs version is cut at release time by `/release` (`pnpm docusaurus docs:version vX.Y.Z`), never in a feature PR |
+| **Version metadata** | none per PR | — | The docs version is cut in its own PR before release (`pnpm docusaurus docs:version vX.Y.Z`), never in a feature PR; `/release` stops if it is missing |
 | **Status vocabulary** | none | — | — |
 
 ## Release
