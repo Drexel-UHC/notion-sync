@@ -28,11 +28,21 @@ type mockNotionClient struct {
 	// Used to exercise the push loop's error classifier: per-row 4xx (n34c) vs
 	// run-wide auth 401/403 (n34h).
 	updateErrors map[string]error
+	// createRequests records CreatePage calls (issue #117). createErrors, when
+	// set for a 1-based call number, makes that CreatePage call fail.
+	createRequests []createRequest
+	createErrors   map[int]error
 }
 
 type updateRequest struct {
 	PageID     string
 	Properties map[string]interface{}
+}
+
+type createRequest struct {
+	DataSourceID string
+	DatabaseID   string
+	Properties   map[string]interface{}
 }
 
 func newMockClient() *mockNotionClient {
@@ -45,7 +55,26 @@ func newMockClient() *mockNotionClient {
 		updatePageReturns: make(map[string]*notion.Page),
 		postUpdatePages:   make(map[string]*notion.Page),
 		updateErrors:      make(map[string]error),
+		createErrors:      make(map[int]error),
 	}
+}
+
+// CreatePage mints "created-<n>" IDs and stores the new row (with the sent
+// properties applied) so a follow-up GetPage sees it, as Notion would.
+func (m *mockNotionClient) CreatePage(dataSourceID, databaseID string, properties map[string]interface{}) (*notion.Page, error) {
+	m.createRequests = append(m.createRequests, createRequest{DataSourceID: dataSourceID, DatabaseID: databaseID, Properties: properties})
+	n := len(m.createRequests)
+	if err, ok := m.createErrors[n]; ok && err != nil {
+		return nil, err
+	}
+	id := fmt.Sprintf("created-%d", n)
+	page := applyProps(&notion.Page{
+		ID:             id,
+		URL:            "https://www.notion.so/" + id,
+		LastEditedTime: "2025-01-01T00:00:00.000Z",
+	}, properties)
+	m.pages[id] = page
+	return page, nil
 }
 
 func (m *mockNotionClient) GetDatabase(databaseID string) (*notion.Database, error) {

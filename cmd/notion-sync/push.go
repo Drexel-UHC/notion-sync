@@ -59,6 +59,17 @@ func confirmPush(preview *sync.PushPreview, yes, isTTY bool, stdin io.Reader, st
 		fmt.Fprintf(stderr, "  %s\n", filepath.Base(p))
 	}
 
+	if len(preview.Creates) > 0 {
+		rowNoun := "row"
+		if len(preview.Creates) != 1 {
+			rowNoun = "rows"
+		}
+		fmt.Fprintf(stderr, "\nWill CREATE %d new %s:\n", len(preview.Creates), rowNoun)
+		for _, p := range preview.Creates {
+			fmt.Fprintf(stderr, "  %s\n", filepath.Base(p))
+		}
+	}
+
 	if len(preview.LocalHalts) > 0 {
 		haltNoun := "file"
 		if len(preview.LocalHalts) != 1 {
@@ -143,7 +154,7 @@ func runPush(args []string) error {
 		if err != nil {
 			return err
 		}
-		if len(preview.Queue) == 0 && len(preview.LocalHalts) == 0 {
+		if len(preview.Queue) == 0 && len(preview.Creates) == 0 && len(preview.LocalHalts) == 0 {
 			fmt.Fprintln(os.Stderr, "Nothing to push: no synced .md files in folder.")
 			return nil
 		}
@@ -223,6 +234,13 @@ func runPush(args []string) error {
 		fmt.Printf("  Would push: %d\n", result.Pushed)
 	} else {
 		fmt.Printf("  Pushed:     %d\n", result.Pushed)
+	}
+	if result.Created > 0 {
+		if *dryRun {
+			fmt.Printf("  Would create: %d\n", result.Created)
+		} else {
+			fmt.Printf("  Created:    %d\n", result.Created)
+		}
 	}
 	fmt.Printf("  Skipped:   %d\n", result.Skipped)
 	if result.SkippedNoOp > 0 {
@@ -312,6 +330,9 @@ func renderAuthHaltedResult(result *sync.PushResult, w io.Writer) {
 	if result.Pushed > 0 {
 		fmt.Fprintf(w, "  Pushed before halt: %d\n", result.Pushed)
 	}
+	if result.Created > 0 {
+		fmt.Fprintf(w, "  Created before halt: %d\n", result.Created)
+	}
 	if result.Failed > 0 {
 		fmt.Fprintf(w, "  Failed before halt: %d\n", result.Failed)
 	}
@@ -335,6 +356,8 @@ func haltClassLabel(c sync.Classification) string {
 		return "unreadable"
 	case sync.ClassHaltInvalidOption:
 		return "invalid-option"
+	case sync.ClassHaltCreatePending:
+		return "create-pending"
 	default:
 		return "halt"
 	}

@@ -33,8 +33,9 @@ Step-group letters map to the four-phase v1.4.0 push DAG. Each phase PR appends 
 | 3d: Rich-text un-skip (rich_text re-included in diff/write/verify) | n31 rich_text re-include (#95/#99) | **R** | ✅ included (#100) |
 | 4: Run summary JSON | n41 | **S** | ✅ included (PR #101) |
 | 5: Positive-push type breadth (Gap A encoders + Gap C null-clear) | *not a new DAG node* — backfills the `buildPropertyValue` branches (`push.go:640-730`) | **P** | ✅ included (#107) |
+| 6: Create rows (`notion-create: true` → new row; pending guard) | *not a DAG node* — new create path (#117) | **N** | ✅ included (#117) |
 
-When adding a phase: append a new `## Phase N — <name>` section with new step IDs (`V1`, `V2`, ... or `C1`, ...). Don't modify existing G/V/C/S/R blocks unless the phase explicitly redefines that contract. **Phase 3d (#99 rich-text un-skip) is one such redefinition:** it flips `C3` from a no-op assertion to a positive-push assertion and drops the "rich_text excluded from the diff" notes in the 3a/3b prose — those edits are intentional, not drift. **Phase 5 (`P` group, #107) and V6/V7 are pure *additions*** — they backfill encoder/halt-class coverage that no live step exercised; they don't redefine any existing contract. Like `R`/`S`, the `P` group is not a new DAG phase — it's coverage breadth over branches the earlier phases already shipped.
+When adding a phase: append a new `## Phase N — <name>` section with new step IDs (`V1`, `V2`, ... or `C1`, ...). Don't modify existing G/V/C/S/R blocks unless the phase explicitly redefines that contract. **Phase 3d (#99 rich-text un-skip) is one such redefinition:** it flips `C3` from a no-op assertion to a positive-push assertion and drops the "rich_text excluded from the diff" notes in the 3a/3b prose — those edits are intentional, not drift. **Phase 5 (`P` group, #107), Phase 6 (`N` group, #117) and V6/V7 are pure *additions*** — they backfill encoder/halt-class coverage that no live step exercised; they don't redefine any existing contract. Like `R`/`S`, the `P` group is not a new DAG phase — it's coverage breadth over branches the earlier phases already shipped.
 
 ## Test database
 
@@ -827,6 +828,75 @@ Changing `Name` does **not** rename the file (the importer writes `<notion-id>.m
 
 ---
 
+## Phase 6 — Create rows (`notion-create: true`, #117)
+
+Push can now **create** a row from a local `.md` that has no `notion-id` and carries `notion-create: true` (properties only — body never sent). Duplicate guard: the marker flips to `notion-create: pending` *before* `POST /pages`; a `pending` file halts every later run. Phase 6 proves the happy path, the dry-run, the pending halt, and the rename-on-refresh against real Notion.
+
+**Fixture: a transient row, not one of the 8.** Every `N` step uses one synthetic file `n-new-row.md` with a fixed title `Push: N-Create (transient)`, `Category: Research` (spec'd — never invent options), `Score: 7`. The row is created in N2 and **trashed in N5**, so the fixture DB returns to exactly 8 rows. Pushes run on the **full folder non-`--force`** — the per-cell diff skips the 8 fixtures (`Unchanged: 8`), so Page 4 is safe.
+
+**🚨 Re-runnability:** if a previous run died between N2 and N5, a stray `Push: N-Create (transient)` row may already exist in Notion. Step N0 checks for it and trashes it first, so a re-run never accumulates duplicates.
+
+### Step N0: Re-import + clear leftovers
+
+1. Notion MCP: query the data source (`collection://35957008-e885-8068-9080-000b89086bb3`) for rows whose `Name` is `Push: N-Create (transient)`; trash any found (`notion-delete-pages`).
+2. Run: `./notion-sync.exe import 35957008-e885-80c5-9e34-f4191fd83907 --output ./test-output/push-e2e`
+
+- **Pass:** all 8 fixture `.md` present; no leftover transient row in Notion.
+
+### Step N1: `--dry-run` lists the create, writes nothing
+
+1. Write `./test-output/push-e2e/notion-sync-test-database-push/n-new-row.md`:
+   ```
+   ---
+   notion-create: true
+   Name: "Push: N-Create (transient)"
+   Category: Research
+   Score: 7
+   ---
+   ```
+2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --dry-run`
+
+- **Pass:**
+  - Exit 0; leading JSON has `"status": "clean"` and `created[]` with one entry `n-new-row.md` (fields include `Name`, `Category`, `Score`); `pushed: []`
+  - Human block shows `Would create: 1`, `Unchanged: 8`
+  - `n-new-row.md` is **byte-identical** to step 1 (no `pending` stamp)
+  - Notion query: still **no** `Push: N-Create (transient)` row
+
+### Step N2: `push --yes` creates the row and links the file
+
+1. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+
+- **Pass:**
+  - stderr preview shows a `Will CREATE 1 new row:` block naming `n-new-row.md`
+  - Exit 0; JSON `"status": "clean"`, `created[0].file == "n-new-row.md"`; human block `Created: 1`, `Unchanged: 8`
+  - `n-new-row.md` now starts with `notion-id`, `notion-url`, `notion-last-edited`, `notion-database-id`, `notion-last-pushed` and has **no** `notion-create` line; `Name` / `Category` / `Score` unchanged
+  - **Independent Notion read** of the new id (negative-path rule C does not apply — this is a brand-new write path, so verify independently): `Name == Push: N-Create (transient)`, `Category == Research`, `Score == 7`. No auto-created option.
+  - Record the new id for N4/N5.
+
+### Step N3: re-push is a no-op (no duplicate)
+
+1. Run the same `push --yes` again.
+
+- **Pass:** exit 0, `created: []`, `Unchanged: 9`; Notion query still shows **exactly one** `Push: N-Create (transient)` row (the guard + write-back held — no second create, no false conflict from a quantized timestamp).
+
+### Step N4: `pending` halts the run; `refresh` renames the created file
+
+1. Write a second file `n-pending.md` with `notion-create: pending` and `Name: "Push: N-Pending (never created)"`.
+2. Run: `./notion-sync.exe push "./test-output/push-e2e/notion-sync-test-database-push" --yes`
+   - **Pass:** non-zero exit; JSON `"status": "halted"` with a `halted[]` entry for `n-pending.md` whose `fix` mentions `refresh`; the human halt line is tagged `[create-pending]`; the stderr preview listed it under **Will halt the run**. Notion: no `Push: N-Pending` row.
+3. Delete `n-pending.md` (the documented recovery once refresh confirms there is no such row).
+4. Run: `./notion-sync.exe refresh "./test-output/push-e2e/notion-sync-test-database-push"`
+   - **Pass:** `n-new-row.md` is gone and `<new-id>.md` exists in its place (renamed by `migrateToUUIDFilenames`), with the same `notion-id`.
+
+### Step N5: Trash the transient row (revert)
+
+1. Notion MCP `notion-delete-pages` on the N2 id.
+2. Delete `<new-id>.md` locally.
+
+- **Pass:** a data-source query returns **no** `Push: N-Create (transient)` row; the DB is back to exactly 8 rows. F1 then runs against the 8 canonicals as usual.
+
+---
+
 ## Final steps
 
 ### Step F1: Final state verification
@@ -857,6 +927,8 @@ Changing `Name` does **not** rename the file (the importer writes `<notion-id>.m
 **Phase 2 V6/V7 additions — no Notion write, but confirm cleanup.** V6 sets invalid `Category`/`Tags` on Page 5 but **halts pre-write** (nothing reaches Notion), so Page 5's `Category` must still be `Research` and `Tags` `{beta, gamma}` (folded into the Page 5 checks below) **and** the DB schema must have **no auto-created `Bogus`/`epsilon` option** — a stray option means the option-guard regressed. V7 only adds/removes a synthetic local file (`unreachable-fake.md`), which must be **gone** from the folder; it never touches Notion.
 
 **Phase 5 additions — Page 5 is the positive-push workhorse (P1–P6 write+revert its date / multi_select / relation / scalars / null / title).** Every `P` step reverts, so Page 5 must end **fully canonical** against `setup.md`. The sweep catches scalar + plain-text-`Name` drift (a leaked formatted `Name` changes the plain text) **and** Page 5's `Due Date` `is_datetime == false` — the sweep projects `is_datetime` directly (P1 guards date-only→UTC promotion; assert `is_datetime == 0`/`false` from the sweep row, not just `start`, since a UTC datetime can keep the same calendar day). No separate full fetch needed for it. Specifically confirm Page 5 ends at: `Name: Push: Cell-Level Test` (single plain run — P6), `Score: 500` (P5 null-clear reverted), `Category: Research` (P4/P5), `Tags: {beta, gamma}` (P2), `Due Date: 2026-09-01` + `is_datetime == false` (P1/P5), `Approved: false`, `Website`/`Contact Email`/`Phone` canonical (P4/P5), `Related: [Page 4]` (P3 swapped to Page 1 then reverted). A leftover non-canonical value on any of these means a `P`-step revert was skipped.
+
+**Phase 6 additions — the DB must hold exactly the 8 fixtures.** N5 trashes the transient row; any surviving `Push: N-Create (transient)` or `Push: N-Pending` row means a revert was skipped (or the pending guard failed). The `N` group never edits a fixture, so the 8 canonicals must be untouched.
 
 If any property's Notion shape doesn't match the canonical, mark the run as TESTS FAILED and list the field + got/want values — don't try to auto-fix; investigate.
 
@@ -928,6 +1000,12 @@ Print a summary table:
 | P4   | select/checkbox/url/email/phone (#107)  | PASS   |
 | P5   | scalar null-clear, populated→null (#107)| PASS   |
 | P6   | formatted title round-trip (#107)       | PASS   |
+| N0   | Re-import + clear leftover create rows  | PASS   |
+| N1   | --dry-run lists create, writes nothing  | PASS   |
+| N2   | push --yes creates + links the file     | PASS   |
+| N3   | re-push is a no-op (no duplicate)       | PASS   |
+| N4   | pending halts; refresh renames file     | PASS   |
+| N5   | Trash the transient row (revert)        | PASS   |
 | F1   | Final state matches canonical (1–8)     | PASS   |
 | F2   | Cleanup                                 | PASS   |
 ```

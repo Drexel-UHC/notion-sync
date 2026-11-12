@@ -240,6 +240,51 @@ func TestConfirmPush_Preview_ListsLocalHaltsBeforePrompt(t *testing.T) {
 	}
 }
 
+// Issue #117: new rows get their own block in the preview, apart from the
+// update queue, so the user sees exactly what will be created.
+func TestConfirmPush_Preview_ListsCreates(t *testing.T) {
+	preview := &sync.PushPreview{
+		Queue:   []string{},
+		Creates: []string{"notion/db/new-a.md", "notion/db/new-b.md"},
+	}
+	var stderr bytes.Buffer
+	confirmPush(preview, true, false, strings.NewReader(""), &stderr)
+
+	out := stderr.String()
+	if !strings.Contains(out, "Will CREATE 2 new rows") {
+		t.Errorf("expected create block in preview, got:\n%s", out)
+	}
+	for _, name := range []string{"new-a.md", "new-b.md"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("expected %s in preview, got:\n%s", name, out)
+		}
+	}
+}
+
+// A folder whose only pending work is new rows must reach the gate, not exit
+// early with "Nothing to push".
+func TestCLI_Push_CreateOnlyFolderReachesGate(t *testing.T) {
+	tmp := setupPushFolder(t)
+	if err := os.Remove(filepath.Join(tmp, "page-one.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "new.md"), []byte("---\nnotion-create: true\ntitle: New\n---\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := pushCmd(tmp).CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected exit 0 on cancel, got %v\n%s", err, out)
+	}
+	s := string(out)
+	if strings.Contains(s, "Nothing to push") {
+		t.Errorf("create-only folder must not short-circuit, got:\n%s", s)
+	}
+	if !strings.Contains(s, "new.md") {
+		t.Errorf("expected new.md in the preview, got:\n%s", s)
+	}
+}
+
 func TestCLI_Version(t *testing.T) {
 	out, err := exec.Command("go", "run", ".", "--version").CombinedOutput()
 	if err != nil {
